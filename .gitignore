@@ -31,3 +31,6 @@ dist/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Local AI-assistant project instructions — kept on disk, not published
+CLAUDE.md

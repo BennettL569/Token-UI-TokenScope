@@ -25,7 +25,8 @@ struct TokenScopeCoreTestsRunner {
         try pricingPersistsInSQLite()
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
-        print("TokenScopeCoreTestsRunner: 20 checks passed")
+        try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
+        print("TokenScopeCoreTestsRunner: 21 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -271,6 +272,56 @@ struct TokenScopeCoreTestsRunner {
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(atPath: url.path + "-wal")
         try? FileManager.default.removeItem(atPath: url.path + "-shm")
+    }
+
+    static func dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-snapshot-filter-test-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        let repository = PersistentUsageRepository(dbURL: url)
+        let now = Date()
+        repository.upsert([
+            UsageRecord(source: .hermes, accountId: "alpha", apiKeyHash: "k1", model: "gpt-5.5", timestamp: now, inputTokens: 10, outputTokens: 20, cacheTokens: 5, estimatedCost: 1, rawSource: "r1"),
+            UsageRecord(source: .codeX, accountId: "beta", apiKeyHash: "k2", model: "gpt-5-mini", timestamp: now.addingTimeInterval(-1), inputTokens: 100, outputTokens: 200, cacheTokens: 50, estimatedCost: 2, rawSource: "r2"),
+            UsageRecord(source: .hermes, accountId: "alpha", apiKeyHash: "k3", model: "claude", timestamp: now.addingTimeInterval(-2), inputTokens: 1, outputTokens: 2, cacheTokens: 3, estimatedCost: 0.5, rawSource: "r3")
+        ])
+        let store = UsageStore(repository: repository)
+
+        // Base, filter-independent aggregates cover every record (35 + 350 + 6 = 391).
+        try expect(store.dashboardSnapshot.today.totalTokens == 391, "snapshot today base mismatch")
+        try expect(store.dashboardSnapshot.all.totalTokens == 391, "snapshot all base mismatch")
+        // Default range is today, no filters → selected equals the base.
+        try expect(store.dashboardSnapshot.selected.totalTokens == 391, "snapshot selected (no filter) mismatch")
+        try expect(store.dashboardSnapshot.recentRecords.count == 3, "snapshot recent count mismatch")
+
+        // Search by account substring → only the two "alpha" hermes rows (35 + 6 = 41).
+        store.searchText = "alpha"
+        try expect(store.dashboardSnapshot.selected.totalTokens == 41, "search-by-account selected mismatch")
+        try expect(store.dashboardSnapshot.toolGroups.count == 1, "search-by-account toolGroups should only contain hermes")
+        try expect(store.dashboardSnapshot.toolGroups[.hermes]?.totalTokens == 41, "search-by-account hermes group mismatch")
+        // Base aggregates must remain correct (served from cache) while filters change.
+        try expect(store.dashboardSnapshot.today.totalTokens == 391, "base today changed under search filter")
+
+        // Search by model substring → only the codeX row (350).
+        store.searchText = "gpt-5-mini"
+        try expect(store.dashboardSnapshot.selected.totalTokens == 350, "search-by-model selected mismatch")
+        try expect(store.dashboardSnapshot.toolGroups[.codeX]?.totalTokens == 350, "search-by-model codeX group mismatch")
+
+        // Tool filter (no search) → only codeX (350).
+        store.searchText = ""
+        store.selectedTool = .codeX
+        try expect(store.dashboardSnapshot.selected.totalTokens == 350, "tool-filter selected mismatch")
+        try expect(store.dashboardSnapshot.recentRecords.count == 1, "tool-filter recent count mismatch")
+
+        // Clearing filters and widening the range restores the full set.
+        store.selectedTool = nil
+        store.selectedRange = .all
+        try expect(store.dashboardSnapshot.selected.totalTokens == 391, "cleared-filter selected mismatch")
+        try expect(store.dashboardSnapshot.recentRecords.count == 3, "cleared-filter recent count mismatch")
+        try expect(store.dashboardSnapshot.all.totalTokens == 391, "base all changed across filter changes")
     }
 
     static func budgetProgressCanUseTokenOrCostMode() throws {

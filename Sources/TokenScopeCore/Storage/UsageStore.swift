@@ -25,7 +25,9 @@ public actor UsageRepository {
 }
 
 public final class UsageStore: ObservableObject {
-    @Published public private(set) var records: [UsageRecord] = []
+    @Published public private(set) var records: [UsageRecord] = [] {
+        didSet { invalidateAggregateCaches() }
+    }
     @Published public private(set) var dashboardSnapshot = DashboardSnapshot()
     @Published public var sources: [UsageSource]
     @Published public var pricing: [ModelPricing]
@@ -57,6 +59,32 @@ public final class UsageStore: ObservableObject {
 
     private let repository: PersistentUsageRepository
     private let registry: AdapterRegistry
+
+    /// Filter-independent aggregates (today / week / month / all). These depend only on
+    /// `records` and the current calendar day — NOT on searchText / selectedTool /
+    /// selectedRange — so they are cached and reused across the frequent filter changes
+    /// instead of re-walking the entire record set on every keystroke.
+    private struct BaseAggregateCache {
+        var day: Date
+        var today: AggregatedUsage
+        var week: AggregatedUsage
+        var month: AggregatedUsage
+        var all: AggregatedUsage
+    }
+    private var baseAggregateCache: BaseAggregateCache?
+
+    /// Trend buckets depend only on the active range (+ records + day), not on
+    /// searchText / selectedTool, so they are cached keyed by the active range.
+    private struct TrendCache {
+        var key: String
+        var buckets: [TrendBucket]
+    }
+    private var trendCache: TrendCache?
+
+    private func invalidateAggregateCaches() {
+        baseAggregateCache = nil
+        trendCache = nil
+    }
 
     public init(repository: PersistentUsageRepository = PersistentUsageRepository(), registry: AdapterRegistry = AdapterRegistry()) {
         self.repository = repository
@@ -152,53 +180,90 @@ public final class UsageStore: ObservableObject {
     }
 
     public func rebuildDashboardSnapshot(now: Date = Date()) {
+        let calendar = Calendar.current
         let customRange = usesCustomDateRange ? customDateRange : nil
         let selectedRangeForSnapshot = selectedRange
         let selectedToolForSnapshot = selectedTool
         let searchTextForSnapshot = searchText
-        let visibleRecords = records.filter { record in
-            let inRange: Bool
-            if let customRange {
-                inRange = customRange.contains(record.timestamp)
-            } else {
-                inRange = selectedRangeForSnapshot.contains(record.timestamp, now: now)
-            }
-            return inRange
-                && (selectedToolForSnapshot == nil || selectedToolForSnapshot == record.source)
-                && (searchTextForSnapshot.isEmpty || record.accountId.localizedCaseInsensitiveContains(searchTextForSnapshot) || record.model.localizedCaseInsensitiveContains(searchTextForSnapshot) || record.apiKeyHash.localizedCaseInsensitiveContains(searchTextForSnapshot))
+
+        // (1) Filter-independent aggregates — cached per (records, calendar day). These do
+        // not depend on the active range / tool / search text, so a keystroke in the search
+        // field reuses them instead of re-walking the record set four more times.
+        let base: BaseAggregateCache
+        if let cached = baseAggregateCache, calendar.isDate(cached.day, inSameDayAs: now) {
+            base = cached
+        } else {
+            base = BaseAggregateCache(
+                day: now,
+                today: AggregationEngine.aggregate(records: records, range: .today, now: now, calendar: calendar),
+                week: AggregationEngine.aggregate(records: records, range: .week, now: now, calendar: calendar),
+                month: AggregationEngine.aggregate(records: records, range: .month, now: now, calendar: calendar),
+                all: AggregationEngine.aggregate(records: records, range: .all, now: now, calendar: calendar)
+            )
+            baseAggregateCache = base
         }
 
-        let today = AggregationEngine.aggregate(records: records, range: .today, now: now)
-        let week = AggregationEngine.aggregate(records: records, range: .week, now: now)
-        let month = AggregationEngine.aggregate(records: records, range: .month, now: now)
-        let selected = visibleRecords.reduce(into: AggregatedUsage()) { partial, record in
-            partial.inputTokens += record.inputTokens
-            partial.outputTokens += record.outputTokens
-            partial.cacheTokens += record.cacheTokens
-            partial.totalTokens += record.totalTokens
-            partial.estimatedCost += record.estimatedCost
+        // (2) Trend — depends only on the active range (+ records + day). Cached by range key,
+        // so it is not recomputed when only searchText / selectedTool change.
+        let trendKey = Self.trendCacheKey(range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
+        let trend: [TrendBucket]
+        if let cached = trendCache, cached.key == trendKey {
+            trend = cached.buckets
+        } else {
+            trend = AggregationEngine.trend(records: records, range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
+            trendCache = TrendCache(key: trendKey, buckets: trend)
         }
-        let all = AggregationEngine.aggregate(records: records, range: .all, now: now)
-        let trend = AggregationEngine.trend(records: records, range: selectedRangeForSnapshot, customRange: customRange, now: now)
-        let toolGroups = Dictionary(grouping: visibleRecords, by: \.source).mapValues { rows in
-            rows.reduce(into: AggregatedUsage()) { partial, record in
-                partial.inputTokens += record.inputTokens
-                partial.outputTokens += record.outputTokens
-                partial.cacheTokens += record.cacheTokens
-                partial.totalTokens += record.totalTokens
-                partial.estimatedCost += record.estimatedCost
+
+        // (3) Filter-dependent values — computed in a single pass over `records` using
+        // precomputed active-range bounds (cheap timestamp comparisons) instead of a
+        // per-record Calendar membership call. `records` is ordered newest-first, so the
+        // first six matches are the most recent ones (matching the previous prefix(6)).
+        let bounds = ActiveRangeBounds(range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
+        let hasSearch = !searchTextForSnapshot.isEmpty
+        var selected = AggregatedUsage()
+        var toolGroups: [ToolKind: AggregatedUsage] = [:]
+        var recentRecords: [UsageRecord] = []
+        recentRecords.reserveCapacity(6)
+        for record in records {
+            guard bounds.contains(record.timestamp) else { continue }
+            if let selectedToolForSnapshot, selectedToolForSnapshot != record.source { continue }
+            if hasSearch {
+                guard record.accountId.localizedCaseInsensitiveContains(searchTextForSnapshot)
+                    || record.model.localizedCaseInsensitiveContains(searchTextForSnapshot)
+                    || record.apiKeyHash.localizedCaseInsensitiveContains(searchTextForSnapshot) else { continue }
             }
+            selected.inputTokens += record.inputTokens
+            selected.outputTokens += record.outputTokens
+            selected.cacheTokens += record.cacheTokens
+            selected.totalTokens += record.totalTokens
+            selected.estimatedCost += record.estimatedCost
+            var group = toolGroups[record.source] ?? AggregatedUsage()
+            group.inputTokens += record.inputTokens
+            group.outputTokens += record.outputTokens
+            group.cacheTokens += record.cacheTokens
+            group.totalTokens += record.totalTokens
+            group.estimatedCost += record.estimatedCost
+            toolGroups[record.source] = group
+            if recentRecords.count < 6 { recentRecords.append(record) }
         }
-        let recentRecords = Array(visibleRecords.prefix(6))
+
         let usageByBudgetPeriod: [BudgetPeriod: AggregatedUsage] = [
-            .daily: today,
-            .weekly: week,
-            .monthly: month
+            .daily: base.today,
+            .weekly: base.week,
+            .monthly: base.month
         ]
         let budgetRows = budgets.map { rule in
             BudgetProgressSnapshot(rule: rule, usage: usageByBudgetPeriod[rule.period] ?? AggregatedUsage(), mode: budgetProgressMode)
         }
-        dashboardSnapshot = DashboardSnapshot(today: today, week: week, month: month, selected: selected, all: all, trend: trend, toolGroups: toolGroups, recentRecords: recentRecords, budgetRows: budgetRows)
+        dashboardSnapshot = DashboardSnapshot(today: base.today, week: base.week, month: base.month, selected: selected, all: base.all, trend: trend, toolGroups: toolGroups, recentRecords: recentRecords, budgetRows: budgetRows)
+    }
+
+    private static func trendCacheKey(range: TimeRange, customRange: CustomDateRange?, now: Date, calendar: Calendar) -> String {
+        let day = calendar.startOfDay(for: now).timeIntervalSince1970
+        if let customRange {
+            return "custom|\(customRange.start.timeIntervalSince1970)|\(customRange.end.timeIntervalSince1970)|\(day)"
+        }
+        return "range|\(range.rawValue)|\(day)"
     }
 
     public func activeRangeContains(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {
@@ -284,5 +349,60 @@ public final class UsageStore: ObservableObject {
 private extension Dictionary {
     func mapKeys<T: Hashable>(_ transform: (Key) -> T) -> [T: Value] {
         Dictionary<T, Value>(uniqueKeysWithValues: map { (transform($0.key), $0.value) })
+    }
+}
+
+/// Precomputed time bounds for the active range, so membership is a couple of cheap
+/// `Date` comparisons per record instead of a `Calendar` granularity call per record.
+/// The bounds are derived to match `TimeRange.contains` / `CustomDateRange.contains`
+/// exactly: today/week/month are half-open `[start, end)` intervals (equivalent to
+/// `Calendar.isDate(_:equalTo:toGranularity:)`), and the custom range is the closed
+/// `[startOfDay(start), 23:59:59(end)]` interval `CustomDateRange.contains` uses.
+private struct ActiveRangeBounds {
+    private enum Kind {
+        case all
+        case halfOpen(Date, Date)
+        case closed(Date, Date)
+    }
+    private let kind: Kind
+
+    init(range: TimeRange, customRange: CustomDateRange?, now: Date, calendar: Calendar) {
+        if let customRange {
+            let start = calendar.startOfDay(for: customRange.start)
+            let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: customRange.end) ?? customRange.end
+            kind = .closed(start, end)
+            return
+        }
+        switch range {
+        case .all:
+            kind = .all
+        case .today:
+            let start = calendar.startOfDay(for: now)
+            let end = calendar.date(byAdding: .day, value: 1, to: start) ?? now
+            kind = .halfOpen(start, end)
+        case .week:
+            if let interval = calendar.dateInterval(of: .weekOfYear, for: now) {
+                kind = .halfOpen(interval.start, interval.end)
+            } else {
+                kind = .all
+            }
+        case .month:
+            if let interval = calendar.dateInterval(of: .month, for: now) {
+                kind = .halfOpen(interval.start, interval.end)
+            } else {
+                kind = .all
+            }
+        }
+    }
+
+    func contains(_ date: Date) -> Bool {
+        switch kind {
+        case .all:
+            return true
+        case .halfOpen(let start, let end):
+            return date >= start && date < end
+        case .closed(let start, let end):
+            return date >= start && date <= end
+        }
     }
 }

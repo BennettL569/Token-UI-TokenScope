@@ -84,6 +84,51 @@ struct TokenScopeTests {
         #expect(store.dashboardSnapshot.recentRecords.count == 2)
     }
 
+    @Test func dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates() {
+        let dbURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-snapshot-filter-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let repository = PersistentUsageRepository(dbURL: dbURL)
+        let now = Date()
+        repository.upsert([
+            UsageRecord(source: .hermes, accountId: "alpha", apiKeyHash: "k1", model: "gpt-5.5", timestamp: now, inputTokens: 10, outputTokens: 20, cacheTokens: 5, estimatedCost: 1, rawSource: "r1"),
+            UsageRecord(source: .codeX, accountId: "beta", apiKeyHash: "k2", model: "gpt-5-mini", timestamp: now.addingTimeInterval(-1), inputTokens: 100, outputTokens: 200, cacheTokens: 50, estimatedCost: 2, rawSource: "r2"),
+            UsageRecord(source: .hermes, accountId: "alpha", apiKeyHash: "k3", model: "claude", timestamp: now.addingTimeInterval(-2), inputTokens: 1, outputTokens: 2, cacheTokens: 3, estimatedCost: 0.5, rawSource: "r3")
+        ])
+        let store = UsageStore(repository: repository)
+
+        // Base, filter-independent aggregates cover every record (35 + 350 + 6 = 391).
+        #expect(store.dashboardSnapshot.today.totalTokens == 391)
+        #expect(store.dashboardSnapshot.all.totalTokens == 391)
+        #expect(store.dashboardSnapshot.selected.totalTokens == 391)
+        #expect(store.dashboardSnapshot.recentRecords.count == 3)
+
+        // Search by account substring → only the two "alpha" hermes rows (35 + 6 = 41).
+        store.searchText = "alpha"
+        #expect(store.dashboardSnapshot.selected.totalTokens == 41)
+        #expect(store.dashboardSnapshot.toolGroups.count == 1)
+        #expect(store.dashboardSnapshot.toolGroups[.hermes]?.totalTokens == 41)
+        // Base aggregates remain correct (served from cache) while filters change.
+        #expect(store.dashboardSnapshot.today.totalTokens == 391)
+
+        // Search by model substring → only the codeX row (350).
+        store.searchText = "gpt-5-mini"
+        #expect(store.dashboardSnapshot.selected.totalTokens == 350)
+        #expect(store.dashboardSnapshot.toolGroups[.codeX]?.totalTokens == 350)
+
+        // Tool filter (no search) → only codeX (350).
+        store.searchText = ""
+        store.selectedTool = .codeX
+        #expect(store.dashboardSnapshot.selected.totalTokens == 350)
+        #expect(store.dashboardSnapshot.recentRecords.count == 1)
+
+        // Clearing filters and widening the range restores the full set.
+        store.selectedTool = nil
+        store.selectedRange = .all
+        #expect(store.dashboardSnapshot.selected.totalTokens == 391)
+        #expect(store.dashboardSnapshot.recentRecords.count == 3)
+        #expect(store.dashboardSnapshot.all.totalTokens == 391)
+    }
+
     @Test func budgetAlertLevels() {
         #expect(BudgetEngine.alertLevel(progress: 0.5) == .normal)
         #expect(BudgetEngine.alertLevel(progress: 0.8) == .warning)

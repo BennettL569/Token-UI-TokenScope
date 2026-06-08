@@ -1,8 +1,6 @@
 # TokenScope
 
-> 本地优先（local-first）的原生 macOS 应用,用于统计本地多个 AI 编码 / 对话工具的 **Token 用量、估算费用、趋势与预算**。所有数据只在本机读取与聚合,**没有任何上传通道**。
->
-> A local-first native macOS app that tracks token usage, cost, trends and budgets across local AI coding/chat tools — read-only, on-device, no upload path.
+> A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
   <img alt="version" src="https://img.shields.io/badge/version-1.0.1-7728ff">
@@ -14,156 +12,156 @@
 
 ---
 
-## 目录
+## Table of contents
 
-- [它是什么](#它是什么)
-- [核心特性](#核心特性)
-- [支持的工具与数据源](#支持的工具与数据源)
-- [安装](#安装)
-- [从源码构建](#从源码构建)
-- [开发与测试命令](#开发与测试命令)
-- [架构](#架构)
-- [数据存储、去重与增量同步](#数据存储去重与增量同步)
-- [费用估算与预算](#费用估算与预算)
-- [性能](#性能v101)
-- [隐私与安全](#隐私与安全)
-- [项目结构](#项目结构)
-- [版本历史](#版本历史)
-- [已知限制 / 路线图](#已知限制--路线图)
-- [许可证](#许可证)
-
----
-
-## 它是什么
-
-**TokenScope** 面向同时使用多个 AI Agent / CLI 工具的开发者,把分散在各工具本地日志、数据库里的 token 用量,汇总成一个**统一的、私密的**可视化面板:今日 / 本周 / 本月用量、估算花费、趋势图、工具分布、预算进度和最近明细。
-
-它**只读取本地文件和本地 SQLite 数据库**,在本机完成全部归一化与聚合,不需要任何 API Key 即可统计用量。界面采用浅色科幻玻璃拟态(glassmorphism)风格,并提供菜单栏迷你面板与 WidgetKit 小组件源码。
-
-> 界面文案、枚举 `rawValue`、同步状态等均为**中文**,且部分中文字符串是持久化到 SQLite 的主键(见 [架构](#架构) 的约定说明)。
+- [What it is](#what-it-is)
+- [Features](#features)
+- [Supported tools & data sources](#supported-tools--data-sources)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Development & test commands](#development--test-commands)
+- [Architecture](#architecture)
+- [Storage, dedup & incremental sync](#storage-dedup--incremental-sync)
+- [Cost estimation & budgets](#cost-estimation--budgets)
+- [Performance (v1.0.1)](#performance-v101)
+- [Privacy & security](#privacy--security)
+- [Project structure](#project-structure)
+- [Version history](#version-history)
+- [Known limitations / roadmap](#known-limitations--roadmap)
+- [License](#license)
 
 ---
 
-## 核心特性
+## What it is
 
-- **多工具统一统计** —— 一次性汇总 Claude Code、Codex、Hermes、OpenClaw、OpenCode 五个工具的用量。
-- **本地优先,零上传** —— 仅读取本地日志 / SQLite,数据保存在本机,无遥测、无上传路径。
-- **增量同步** —— 通过游标(cursor)记录每个文件的续读位置,默认只解析新增内容,避免每次全量重扫;也支持一键全量重读。
-- **SQLite 持久化** —— 归一化记录、价格、预算、游标均落地 SQLite(WAL 模式);记录与账号/源解耦,删除源后历史用量依旧保留。
-- **费用估算** —— 按「美元 / 百万 token」估算;若数据源本身提供费用(如 Hermes、OpenClaw、OpenCode),优先采用源费用。
-- **预算雷达** —— 每日 / 每周 / 每月的 token 与费用预算,支持「按 Token」或「按费用」两种进度口径,80% / 100% 分级提醒。
-- **趋势与分布** —— 按小时 / 天 / 月分桶的趋势图,工具分布与缓存命中率。
-- **菜单栏 + 小组件** —— `MenuBarExtra` 迷你面板(可显示今日 token 或今日费用);随附 WidgetKit 小组件源码。
-- **导出** —— CSV / JSON 导出,**默认脱敏**账号 / API Key 标识。
+**TokenScope** is for developers who use multiple AI agents / CLI tools and want one **unified, private** dashboard of token usage that is otherwise scattered across each tool's local logs and databases: today / week / month totals, estimated cost, trend charts, tool distribution, budget progress and recent activity.
+
+It **only reads local files and local SQLite databases**, normalizes and aggregates everything on-device, and needs **no API key** to count usage. The UI is a light sci-fi glassmorphism dashboard and also ships a menu-bar mini panel plus WidgetKit widget source.
+
+> The UI strings, enum `rawValue`s and sync-status messages are written in **Chinese**, and some of those Chinese strings are persisted as SQLite keys (see the conventions note under [Architecture](#architecture)).
 
 ---
 
-## 支持的工具与数据源
+## Features
 
-当前内置 **5** 个工具适配器:
+- **Unified multi-tool tracking** — aggregates usage from Claude Code, Codex, Hermes, OpenClaw and OpenCode in one place.
+- **Local-first, zero upload** — reads local logs / SQLite only; data stays on your machine. No telemetry, no upload path.
+- **Incremental sync** — per-file resume cursors mean only newly appended data is parsed by default; a full re-read is one click away.
+- **SQLite persistence** — normalized records, pricing, budgets and cursors are stored in SQLite (WAL). Records are keyed independently of sources/accounts, so historical usage survives source/account removal.
+- **Cost estimation** — per-million-token pricing; when a source already reports cost (Hermes, OpenClaw, OpenCode), the source-provided cost is preferred.
+- **Budget radar** — daily / weekly / monthly token and cost budgets, with a "by tokens" or "by cost" progress mode and 80% / 100% tiered alerts.
+- **Trends & distribution** — hour/day/month-bucketed trend chart, tool distribution and cache-hit rate.
+- **Menu bar + widgets** — a `MenuBarExtra` mini panel (shows today's tokens or today's cost); WidgetKit widget source is included.
+- **Export** — CSV / JSON export that **redacts** account / API-key identifiers by default.
 
-| 工具 | 数据源 | 类型 |
+---
+
+## Supported tools & data sources
+
+Five built-in adapters:
+
+| Tool | Data source | Type |
 |---|---|---|
-| **Claude Code** | `~/.claude/projects/**/*.jsonl` | JSONL 逐行解析 |
-| **Codex** | `~/.codex/sessions/**/*.jsonl`、`~/.codex/archived_sessions/*.jsonl` | JSONL（`token_count` 事件） |
-| **Hermes** | `~/.hermes/state.db` | SQLite（`sessions` 表，含 `estimated_cost_usd`） |
-| **OpenClaw** | `~/.openclaw/agents/*/sessions/*.jsonl` | JSONL（含 `usage.cost.total`） |
-| **OpenCode** | `~/.local/share/opencode/opencode.db` | SQLite（消息行，含 cost 字段） |
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` | JSONL, line-by-line |
+| **Codex** | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl` | JSONL (`token_count` events) |
+| **Hermes** | `~/.hermes/state.db` | SQLite (`sessions` table, incl. `estimated_cost_usd`) |
+| **OpenClaw** | `~/.openclaw/agents/*/sessions/*.jsonl` | JSONL (incl. `usage.cost.total`) |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` | SQLite (message rows, incl. cost fields) |
 
-> 想新增工具(Cursor / OpenAI / Gemini …):在 `Models.swift` 增加 `ToolKind` case → 实现适配器 → 在 `AdapterRegistry` 注册 → 在 `UsageStore.defaultPricing()` 补默认价格。JSONL 类工具可直接复用 `LocalJSONLUsageAdapter`(传入一个解析闭包)。
+> **Adding a tool** (Cursor / OpenAI / Gemini …): add a `ToolKind` case in `Models.swift`, implement an adapter, register it in `AdapterRegistry`, and add default rows in `UsageStore.defaultPricing()`. JSONL-based tools can reuse `LocalJSONLUsageAdapter` by passing a parser closure.
 
 ---
 
-## 安装
+## Install
 
-### 方式一:从 Release 下载(推荐普通用户)
+### Option A — download a release (recommended for most users)
 
-1. 到 [Releases](https://github.com/BennettL569/Token-UI-TokenScope/releases) 下载最新版的 `TokenScope-<version>.dmg` 或 `TokenScope-<version>-macOS.zip`。
-2. 打开 `.dmg`,把 `TokenScope.app` 拖入「应用程序」;或解压 zip 后拖入「应用程序」。
-3. **首次打开**:该构建为本地 **ad-hoc 签名、未经 Apple 公证**,Gatekeeper 可能拦截。请**右键点击 App → 打开**(只需一次),或在终端执行:
+1. Grab the latest `TokenScope-<version>.dmg` or `TokenScope-<version>-macOS.zip` from [Releases](https://github.com/BennettL569/Token-UI-TokenScope/releases).
+2. Open the `.dmg` and drag `TokenScope.app` into Applications (or unzip and drag it in).
+3. **First launch**: this build is **ad-hoc signed and not notarized by Apple**, so Gatekeeper may block it. **Right-click the app → Open** (once), or run:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/TokenScope.app
    ```
 
-> 要求 **macOS 14+**。应用为**非沙盒**构建,以便读取 `~/.claude`、`~/.codex` 等本地日志。
+> Requires **macOS 14+**. The app is a **non-sandboxed** build so it can read local logs under `~/.claude`, `~/.codex`, etc.
 
-### 方式二:自行构建并安装
+### Option B — build & install yourself
 
 ```bash
 git clone https://github.com/BennettL569/Token-UI-TokenScope.git
 cd Token-UI-TokenScope
-packaging/build_app.sh          # 产出 dist/TokenScope.app(release、ad-hoc 签名、非沙盒)
+packaging/build_app.sh          # → dist/TokenScope.app (release, ad-hoc signed, non-sandboxed)
 cp -R dist/TokenScope.app /Applications/
 ```
 
 ---
 
-## 从源码构建
+## Build from source
 
-### 环境要求
+### Requirements
 
 - macOS 14+
-- Swift 6（`swift-tools-version: 6.0`）—— Xcode 或 Command Line Tools
-- 链接系统 `sqlite3`(已在 `Package.swift` 中配置)
-- 打 DMG 需要 `hdiutil`、签名需要 `codesign`(macOS 自带)
+- Swift 6 (`swift-tools-version: 6.0`) — Xcode or Command Line Tools
+- Links the system `sqlite3` (already configured in `Package.swift`)
+- `hdiutil` to build a DMG, `codesign` to sign (both ship with macOS)
 
 ```bash
 swift --version
 ```
 
-### 构建与运行
+### Build & run
 
 ```bash
-swift build                                  # debug 构建全部产物
-swift run TokenScope                          # 运行 App(非沙盒,可读取 ~/.claude 等)
-swift build -c release --product TokenScope   # release 构建
+swift build                                   # debug build of all products
+swift run TokenScope                          # run the app (non-sandboxed; can read ~/.claude etc.)
+swift build -c release --product TokenScope   # release build
 ```
 
-### 打包
+### Package
 
 ```bash
-packaging/build_app.sh    # → dist/TokenScope.app（release + .icns + ad-hoc 签名，非沙盒/未公证）
-packaging/build_dmg.sh    # → dist/TokenScope-<version>.dmg（带 /Applications 拖拽符号链接）
+packaging/build_app.sh    # → dist/TokenScope.app (release + .icns + ad-hoc signing; non-sandboxed/unnotarized)
+packaging/build_dmg.sh    # → dist/TokenScope-<version>.dmg (with an /Applications drag symlink)
 ```
 
-> WidgetKit 扩展**不能**由 SwiftPM 构建。仓库内的 `TokenScope.xcodeproj` 镜像了同一套源码,是构建 `TokenScopeWidgetsExtension` 的**唯一**途径。注意:Xcode 构建会启用 App Sandbox(仅 `files.user-selected.read-only`),沙盒下主目录日志适配器无法读取——这也是 `swift run` / `build_app.sh` 产出**非沙盒**二进制的原因。
+> SwiftPM **cannot** build the WidgetKit extension. `TokenScope.xcodeproj` mirrors the same sources and is the **only** way to build `TokenScopeWidgetsExtension`. Note: the Xcode build enables App Sandbox (`files.user-selected.read-only` only), under which the home-directory log adapters cannot read — which is why `swift run` / `build_app.sh` produce **non-sandboxed** binaries.
 
 ---
 
-## 开发与测试命令
+## Development & test commands
 
-仓库有**两套覆盖同一逻辑的测试**(修改核心逻辑时需同步更新两者):
+There are **two parallel test suites** covering the same logic (update both when you change core logic):
 
 ```bash
-# 1) 手写的快速校验器(不依赖 XCTest/Swift Testing 运行时)
+# 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    预期输出: TokenScopeCoreTestsRunner: 21 checks passed
+#    expected: TokenScopeCoreTestsRunner: 21 checks passed
 
-# 2) Swift Testing 套件
+# 2) Swift Testing suite
 swift test
-swift test --filter aggregationFiltersToday   # 跑单个测试
+swift test --filter aggregationFiltersToday   # run a single test
 
-# 3) 针对真实本地数据源的冒烟测试(跑两遍以验证增量同步)
+# 3) Smoke test against real local data sources (runs twice to exercise incremental sync)
 swift run TokenScopeSmoke
-#    打印两趟的记录数与各工具同步状态
+#    prints record counts and per-tool sync status for both passes
 ```
 
-> 没有配置 linter / formatter。
+> No linter / formatter is configured.
 
 ---
 
-## 架构
+## Architecture
 
-依赖方向自下而上:
+Dependency direction, bottom-up:
 
 ```mermaid
 flowchart TD
-  App[TokenScopeApp · SwiftUI 外壳]
-  Store[UsageStore · ObservableObject 中枢]
-  Snapshot[DashboardSnapshot · 预计算快照]
+  App[TokenScopeApp · SwiftUI shell]
+  Store[UsageStore · ObservableObject hub]
+  Snapshot[DashboardSnapshot · precomputed]
   Registry[AdapterRegistry]
-  Adapters[UsageAdapter 实现]
+  Adapters[UsageAdapter implementations]
   Repo[(PersistentUsageRepository · SQLite)]
   Pricing[PricingEngine]
   Budget[BudgetEngine]
@@ -181,22 +179,22 @@ flowchart TD
   Store --> Widget
 ```
 
-### 模块
+### Modules
 
-| 模块 | 说明 |
+| Module | Role |
 |---|---|
-| `TokenScopeCore`（library，链接 `sqlite3`） | 全部逻辑、无 SwiftUI:`Models/`、`Adapters/`、`Services/`(引擎、导入导出、Keychain、配置、widget 摘要)、`Storage/`。可测试代码都在这里。 |
-| `TokenScopeApp`（executable） | SwiftUI 外壳,依赖 Core。入口 `App.swift` + `AppDelegate.swift`。 |
-| `TokenScopeCoreTestsRunner` / `TokenScopeSmoke`（executable） | 校验 / 冒烟工具。 |
-| `TokenScopeWidgets/` | WidgetKit 源码,**仅** Xcode `TokenScopeWidgetsExtension` target 编译。 |
+| `TokenScopeCore` (library, links `sqlite3`) | All logic, no SwiftUI: `Models/`, `Adapters/`, `Services/` (engines, import/export, keychain, config, widget summary), `Storage/`. Everything testable lives here. |
+| `TokenScopeApp` (executable) | SwiftUI shell, depends on Core. Entry: `App.swift` + `AppDelegate.swift`. |
+| `TokenScopeCoreTestsRunner` / `TokenScopeSmoke` (executables) | Verification / smoke harnesses. |
+| `TokenScopeWidgets/` | WidgetKit source, compiled **only** by the Xcode `TokenScopeWidgetsExtension` target. |
 
-### 运行时数据流
+### Runtime flow
 
-`UsageStore`(`Storage/UsageStore.swift`)是整个 UI 绑定的 `ObservableObject` 中枢,持有 `records`、`pricing`、`budgets`、当前筛选(时间范围 / 搜索 / 工具)以及预计算的 `dashboardSnapshot`。筛选 / 范围 / 预算变化时通过 `didSet` 触发快照重算——**面板的数据来源是这个快照,而非实时过滤**。
+`UsageStore` (`Storage/UsageStore.swift`) is the `ObservableObject` hub the whole UI binds to. It holds `records`, `pricing`, `budgets`, the active filters (time range / search / tool) and a precomputed `dashboardSnapshot`. Filter/range/budget changes trigger a snapshot rebuild via `didSet` — **the snapshot, not live filtering, is the dashboard's source of truth**.
 
-`refreshAll(fullScan:)` 是同步入口:对每个启用的源,用 `AdapterRegistry` 按 `ToolKind` 找到适配器 → `adapter.refresh(...)` → upsert 进 `PersistentUsageRepository`(SQLite)→ 重载 `records` → 重建快照 → 写出 `WidgetSummary` 到 App Group。
+`refreshAll(fullScan:)` is the sync entry point: for each enabled source it resolves an adapter from `AdapterRegistry` by `ToolKind`, calls `adapter.refresh(...)`, upserts results into `PersistentUsageRepository` (SQLite), reloads `records`, rebuilds the snapshot, and writes a `WidgetSummary` to the App Group.
 
-### 适配器协议
+### Adapter protocol
 
 ```swift
 public protocol UsageAdapter: Sendable {
@@ -211,46 +209,46 @@ public protocol UsageAdapter: Sendable {
 }
 ```
 
-两种可复用的适配器形态:`LocalJSONLUsageAdapter`(通用 JSONL 逐行读取,传入 `parser` 闭包)、SQLite 适配器(`HermesSQLiteUsageAdapter`、`OpenCodeSQLiteUsageAdapter`,以只读方式打开)。
+Two reusable adapter shapes: `LocalJSONLUsageAdapter` (a generic line-by-line JSONL reader taking a `parser` closure) and SQLite adapters (`HermesSQLiteUsageAdapter`, `OpenCodeSQLiteUsageAdapter`, opened read-only).
 
-### 约定与坑
+### Conventions & gotchas
 
-- **中文枚举 `rawValue` 是持久化键,不只是显示文案。** 例如 `BudgetPeriod.daily = "每日"` 是 SQLite 主键;`ToolKind` / `TimeRange` / `BudgetProgressMode` 的 raw value 会进入数据库与 CSV 导出。随意改名会静默破坏已存数据与去重键——要迁移,不要轻易重命名。
+- **Chinese enum `rawValue`s are persisted keys, not just labels.** For example `BudgetPeriod.daily = "每日"` is a SQLite primary key; `ToolKind` / `TimeRange` / `BudgetProgressMode` raw values appear in the DB and in CSV export. Changing a `rawValue` silently breaks stored data and dedup keys — migrate, don't rename casually.
 
 ---
 
-## 数据存储、去重与增量同步
+## Storage, dedup & incremental sync
 
-### 存储位置
+### Location
 
 ```text
-~/Library/Application Support/TokenScope/usage.sqlite   # WAL 模式
+~/Library/Application Support/TokenScope/usage.sqlite   # WAL mode
 ```
 
-表:`usage_records`、`model_pricing`、`budget_rules`、`refresh_cursors`。历史上的 `usage-records.json` 会在首次打开时自动迁移一次。
+Tables: `usage_records`, `model_pricing`, `budget_rules`, `refresh_cursors`. A legacy `usage-records.json` is auto-migrated once on first open.
 
-### 去重
+### Dedup
 
-`UsageRecord.dedupeKey` 是 `usage_records` 的主键,upsert 覆盖:
+`UsageRecord.dedupeKey` is the primary key of `usage_records`; upserts overwrite:
 
-- 有 request id 时:`source::request::<requestId>`
-- 否则:`source::fallback::sha256(timestamp|model|tokens|source|rawSource)`
+- with a request id: `source::request::<requestId>`
+- otherwise: `source::fallback::sha256(timestamp|model|tokens|source|rawSource)`
 
-因为记录的键独立于源 / 账号,**删除源或账号后历史用量仍然保留**。`totalTokens = input + output + cache`,在初始化时计算。
+Because the key is independent of source/account, **historical usage survives source or account removal**. `totalTokens = input + output + cache`, computed in the initializer.
 
-### 增量同步(游标)
+### Incremental sync (cursors)
 
-`refresh_cursors` 为每个文件保存续读位置:
+`refresh_cursors` stores a per-file resume point:
 
-- **JSONL 适配器**:保存字节偏移(文件大小),下次 `seek` 越过它 → 只解析新增行。
-- **SQLite 适配器**:保存时间戳,查询 `cursor − 24h` 之后的行(回看窗口用于吸收迟写入的行)。
-- `fullScan: true` 会清空 / 忽略游标;默认刷新是增量。
+- **JSONL adapters** store a byte offset (file size) and seek past it next time → only newly appended lines are parsed.
+- **SQLite adapters** store a timestamp and query rows newer than `cursor − 24h` (the lookback absorbs late-written rows).
+- `fullScan: true` clears/ignores cursors; the default refresh is incremental.
 
 ---
 
-## 费用估算与预算
+## Cost estimation & budgets
 
-费用按「美元 / 百万 token」估算:
+Cost is estimated with per-million-token pricing:
 
 ```text
 cost = inputTokens  / 1_000_000 * inputPrice
@@ -258,81 +256,81 @@ cost = inputTokens  / 1_000_000 * inputPrice
      + cacheTokens  / 1_000_000 * cachePrice
 ```
 
-匹配顺序为 `(tool, model)` → `(model)` → 内置兜底价。**若数据源已提供费用则优先采用**(Hermes `estimated_cost_usd`、OpenClaw `usage.cost.total`、OpenCode cost 字段)。金额内部用 `Decimal`,仅在写 SQLite / SwiftUI 显示时桥接为 `Double`。可在 **Pricing** 页手动增改模型价格(持久化到 SQLite)。
+Matching order is `(tool, model)` → `(model)` → a hardcoded fallback. **Source-provided cost is preferred when present** (Hermes `estimated_cost_usd`, OpenClaw `usage.cost.total`, OpenCode cost fields). Money is `Decimal` internally, bridged to `Double` only for SQLite / SwiftUI. You can add/update model pricing on the **Pricing** screen (persisted to SQLite).
 
-预算进度两种口径(可在面板切换):
+Budget progress has two modes (toggle in-app):
 
-- **Tokens**:已用总 token / token 预算
-- **费用**:估算费用 / 费用预算
+- **Tokens** — used total tokens / token budget
+- **Cost** — estimated cost / cost budget
 
-分级:`< 0.8` 正常 · `< 1` 警告 · `≥ 1` 超支。
-
----
-
-## 性能(v1.0.1)
-
-v1.0.1 修复了在搜索 / 切换筛选时的**严重掉帧卡顿**(根因是主线程同步重算,而非 UI 特效):
-
-- **仪表盘快照**:缓存与筛选无关的聚合(今日 / 本周 / 本月 / 全部)与趋势(随记录变化或跨天失效),筛选相关部分改为基于**预计算区间边界**的单趟遍历。每次按键的主线程开销从「对全量记录做约 8 趟含日历粒度运算的遍历」降到「1 趟廉价遍历」。
-- **窗口配置**:不再在每个 AppKit 事件 tick 重配窗口,改为每个窗口仅配置一次。
-- **刷新 / 持久化移出主线程**:`upsert`、全表重载、widget 摘要聚合、价格 / 预算写入均改到后台执行,启动 / 刷新不再冻结界面。
+Alert levels: `< 0.8` normal · `< 1` warning · `≥ 1` exceeded.
 
 ---
 
-## 隐私与安全
+## Performance (v1.0.1)
 
-- 仅读取本地文件与本地 SQLite,**无任何遥测 / 上传路径**。
-- 统计用量**不需要 API Key**。
-- 界面只显示账号 / API 标识或其脱敏值;真实密钥经 `KeychainService` 走 macOS Keychain。
-- 导出**默认脱敏**账号 / API Key 标识。
+v1.0.1 fixes severe frame drops / stutter while searching or changing filters (the cause was synchronous main-thread work, not UI effects):
+
+- **Dashboard snapshot** — filter-independent aggregates (today/week/month/all) and the trend are cached (invalidated when records change or the day rolls over); filter-dependent values are computed in a single pass using precomputed range bounds. Per-keystroke main-thread work drops from ~8 Calendar+Decimal passes over the whole record set to one cheap pass.
+- **Window configuration** — windows are configured once instead of on every AppKit `applicationDidUpdate` tick.
+- **Off-main refresh/persistence** — upsert, full-table reload, widget-summary aggregation and pricing/budget writes run off the main thread, so launch/refresh no longer freezes the UI.
 
 ---
 
-## 项目结构
+## Privacy & security
+
+- Reads local files and local SQLite only — **no telemetry / upload path**.
+- Counting usage **does not require an API key**.
+- The UI shows only account / API identity labels or masked values; real keys go through macOS Keychain via `KeychainService`.
+- Export **redacts** account / API-key identifiers by default.
+
+---
+
+## Project structure
 
 ```text
 Token-UI-TokenScope/
 ├── Package.swift
 ├── Sources/
-│   ├── TokenScopeApp/            # SwiftUI 外壳(App / AppDelegate / Views / Theme)
-│   ├── TokenScopeCore/           # 逻辑核心
-│   │   ├── Adapters/             # UsageAdapter + 各工具适配器与解析器
+│   ├── TokenScopeApp/            # SwiftUI shell (App / AppDelegate / Views / Theme)
+│   ├── TokenScopeCore/           # logic core
+│   │   ├── Adapters/             # UsageAdapter + per-tool adapters and parsers
 │   │   ├── Models/               # Models.swift
 │   │   ├── Services/             # Engines / ImportExport / Keychain / WidgetSummary / Config
 │   │   └── Storage/              # UsageStore / PersistentUsageRepository
 │   ├── TokenScopeCoreTestsRunner/
 │   └── TokenScopeSmoke/
-├── Tests/TokenScopeTests/        # Swift Testing 套件
-├── TokenScopeWidgets/            # WidgetKit 源码(仅 Xcode 构建)
-├── TokenScope.xcodeproj/         # 镜像源码;构建 Widget 扩展的唯一途径
-├── Config/                       # entitlements / Widget Info.plist
+├── Tests/TokenScopeTests/        # Swift Testing suite
+├── TokenScopeWidgets/            # WidgetKit source (Xcode build only)
+├── TokenScope.xcodeproj/         # mirrors the sources; only way to build the widget extension
+├── Config/                       # entitlements / widget Info.plist
 ├── packaging/                    # build_app.sh / build_dmg.sh
 ├── docs/ARCHITECTURE.md
-└── dist/                         # 打包产物(git 忽略)
+└── dist/                         # build output (git-ignored)
 ```
 
 ---
 
-## 版本历史
+## Version history
 
-| 版本 | 说明 |
+| Version | Notes |
 |---|---|
-| **v1.0.1** | 性能修复:消除仪表盘掉帧卡顿(快照缓存 + 单趟遍历 + 预计算边界);窗口仅配置一次;刷新 / 持久化移出主线程。 |
-| **v1.0.0** | 首个版本:5 工具适配、SQLite 持久化、费用估算、预算、导出、菜单栏、WidgetKit 源码。 |
+| **v1.0.1** | Performance: eliminate dashboard frame drops (snapshot caching + single-pass + precomputed bounds); configure windows once; move refresh/persistence off the main thread. |
+| **v1.0.0** | Initial release: 5-tool adapters, SQLite persistence, cost estimation, budgets, export, menu bar, WidgetKit source. |
 
-完整历史见 [commits](https://github.com/BennettL569/Token-UI-TokenScope/commits/main) 与 [Releases](https://github.com/BennettL569/Token-UI-TokenScope/releases)。
-
----
-
-## 已知限制 / 路线图
-
-- 应用为 **ad-hoc 签名、未公证**;公开分发需 Apple Developer ID 证书 + `notarytool` 公证。
-- WidgetKit 小组件需在 Xcode 的 Widget Extension target(配置相同 App Group)中构建,SwiftPM 不构建它。
-- 数据源 / 账号配置目前未持久化(历史用量已持久化)。
-- 计划中:CSV 导入 UI、SQLite 导出历史、预算阈值本地通知、更多适配器(Cursor / OpenAI / Gemini 等)、Developer ID 签名与公证。
+See the [commit history](https://github.com/BennettL569/Token-UI-TokenScope/commits/main) and [Releases](https://github.com/BennettL569/Token-UI-TokenScope/releases) for full details.
 
 ---
 
-## 许可证
+## Known limitations / roadmap
 
-尚未选择许可证。作为开源项目公开前,请添加 `LICENSE`(如 `MIT` / `Apache-2.0` / `GPL-3.0`)。
+- The app is **ad-hoc signed and not notarized**; public distribution needs an Apple Developer ID certificate + `notarytool` notarization.
+- The WidgetKit widget must be built in an Xcode Widget Extension target (with a matching App Group); SwiftPM does not build it.
+- Data source / account configuration is not persisted yet (historical usage is).
+- Planned: CSV import UI, SQLite-backed export history, local budget-threshold notifications, more adapters (Cursor / OpenAI / Gemini …), Developer ID signing & notarization.
+
+---
+
+## License
+
+No license has been selected yet. Add a `LICENSE` file (e.g. `MIT` / `Apache-2.0` / `GPL-3.0`) before publishing as open source.

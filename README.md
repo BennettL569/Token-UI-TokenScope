@@ -8,6 +8,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite-lightgrey">
+  <img alt="license" src="https://img.shields.io/badge/license-GPL--3.0-green">
 </p>
 
 ---
@@ -333,4 +334,4 @@ See the [commit history](https://github.com/BennettL569/Token-UI-TokenScope/comm
 
 ## License
 
-No license has been selected yet. Add a `LICENSE` file (e.g. `MIT` / `Apache-2.0` / `GPL-3.0`) before publishing as open source.
+Licensed under the **GNU General Public License v3.0** (GPL-3.0). See [LICENSE](LICENSE) for the full text.

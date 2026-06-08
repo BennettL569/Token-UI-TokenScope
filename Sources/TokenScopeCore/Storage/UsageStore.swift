@@ -81,6 +81,12 @@ public final class UsageStore: ObservableObject {
     }
     private var trendCache: TrendCache?
 
+    /// Serial queue for pricing/budget persistence. The pricing and budget tables are
+    /// edited via SwiftUI bindings that fire on every keystroke; writing them through this
+    /// queue keeps the SQLite work off the main thread while still serializing writes so the
+    /// last edit wins. The repository itself is internally locked and Sendable.
+    private let writeQueue = DispatchQueue(label: "com.tokenscope.repository-write", qos: .utility)
+
     private func invalidateAggregateCaches() {
         baseAggregateCache = nil
         trendCache = nil
@@ -119,7 +125,11 @@ public final class UsageStore: ObservableObject {
         isRefreshing = true
         refreshProgress = fullScan ? "准备全量重读" : "准备增量同步"
         errorMessage = nil
-        if fullScan { repository.clearRefreshCursors() }
+        // The repository is thread-safe (NSLock) and Sendable, so its heavy synchronous
+        // work (writing new rows, reloading the full table) is run off the main thread via
+        // detached tasks; only the UI-facing @Published mutations happen on the main actor.
+        let repo = repository
+        if fullScan { await Task.detached { repo.clearRefreshCursors() }.value }
         var refreshedSources = sources
         var errors: [String] = []
         for index in refreshedSources.indices where refreshedSources[index].isEnabled {
@@ -130,8 +140,8 @@ public final class UsageStore: ObservableObject {
             sources = refreshedSources
             refreshProgress = "正在\(fullScan ? "全量" : "增量")读取 \(source.tool.rawValue)…"
             do {
-                let newRecords = try await adapter.refresh(source: source, pricing: pricing, cursorStore: repository, fullScan: fullScan)
-                repository.upsert(newRecords)
+                let newRecords = try await adapter.refresh(source: source, pricing: pricing, cursorStore: repo, fullScan: fullScan)
+                await Task.detached { repo.upsert(newRecords) }.value
                 refreshedSources[index].syncStatus = SyncStatus(kind: .success, lastSync: Date(), message: "已同步 \(newRecords.count) 条新增/更新")
             } catch {
                 errors.append("\(source.tool.rawValue): \(error.localizedDescription)")
@@ -139,9 +149,14 @@ public final class UsageStore: ObservableObject {
             }
         }
         sources = refreshedSources
-        records = repository.all()
+        let reloaded = await Task.detached { repo.all() }.value
+        records = reloaded
         rebuildDashboardSnapshot()
-        try? WidgetSummaryStore.save(widgetSummary())
+        // The widget summary walks the full record set several times; compute it off-main.
+        let budgetsSnapshot = budgets
+        let mode = budgetProgressMode
+        let summary = await Task.detached { UsageStore.makeWidgetSummary(records: reloaded, budgets: budgetsSnapshot, budgetProgressMode: mode) }.value
+        try? WidgetSummaryStore.save(summary)
         errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
         refreshProgress = errors.isEmpty ? "同步完成：\(records.count) 条" : "同步完成，有 \(errors.count) 个错误"
         isRefreshing = false
@@ -149,7 +164,8 @@ public final class UsageStore: ObservableObject {
 
     @MainActor
     public func rebuildAllData() async {
-        repository.clear()
+        let repo = repository
+        await Task.detached { repo.clear() }.value
         records = []
         rebuildDashboardSnapshot()
         await refreshAll(fullScan: true)
@@ -157,16 +173,29 @@ public final class UsageStore: ObservableObject {
 
     @MainActor
     public func clearLocalData() async {
-        repository.clear()
+        let repo = repository
+        await Task.detached { repo.clear() }.value
         records = []
         rebuildDashboardSnapshot()
     }
 
     public func filteredRecords(now: Date = Date()) -> [UsageRecord] {
-        records.filter { record in
-            activeRangeContains(record.timestamp, now: now)
-            && (selectedTool == nil || selectedTool == record.source)
-            && (searchText.isEmpty || record.accountId.localizedCaseInsensitiveContains(searchText) || record.model.localizedCaseInsensitiveContains(searchText) || record.apiKeyHash.localizedCaseInsensitiveContains(searchText))
+        // Precompute the active-range bounds once (cheap timestamp comparisons per record)
+        // instead of calling Calendar membership for every row — this is re-run on every
+        // keystroke by the details view / export, over the full record set.
+        let bounds = ActiveRangeBounds(range: selectedRange, customRange: usesCustomDateRange ? customDateRange : nil, now: now, calendar: .current)
+        let search = searchText
+        let tool = selectedTool
+        let hasSearch = !search.isEmpty
+        return records.filter { record in
+            guard bounds.contains(record.timestamp) else { return false }
+            if let tool, tool != record.source { return false }
+            if hasSearch {
+                return record.accountId.localizedCaseInsensitiveContains(search)
+                    || record.model.localizedCaseInsensitiveContains(search)
+                    || record.apiKeyHash.localizedCaseInsensitiveContains(search)
+            }
+            return true
         }
     }
 
@@ -274,9 +303,15 @@ public final class UsageStore: ObservableObject {
     }
 
     public func widgetSummary(now: Date = Date()) -> WidgetSummary {
-        let today = aggregate(range: .today, now: now)
-        let week = aggregate(range: .week, now: now)
-        let month = aggregate(range: .month, now: now)
+        Self.makeWidgetSummary(records: records, budgets: budgets, budgetProgressMode: budgetProgressMode, now: now)
+    }
+
+    /// Pure, off-actor-callable widget-summary computation. Takes only Sendable inputs so it
+    /// can run inside a detached task (it walks the full record set several times).
+    public static func makeWidgetSummary(records: [UsageRecord], budgets: [BudgetRule], budgetProgressMode: BudgetProgressMode, now: Date = Date()) -> WidgetSummary {
+        let today = AggregationEngine.aggregate(records: records, range: .today, now: now)
+        let week = AggregationEngine.aggregate(records: records, range: .week, now: now)
+        let month = AggregationEngine.aggregate(records: records, range: .month, now: now)
         let dailyBudget = budgets.first { $0.period == .daily } ?? BudgetRule(period: .daily, tokenLimit: 1, costLimit: 1)
         let toolTotals = AggregationEngine.groupByTool(records: records, range: .today, now: now).mapKeys { $0.rawValue }.mapValues { $0.totalTokens }
         let modelTotals = AggregationEngine.groupByModel(records: records, range: .today, now: now).mapValues { $0.totalTokens }
@@ -289,11 +324,14 @@ public final class UsageStore: ObservableObject {
         } else {
             pricing.append(item)
         }
-        repository.upsertPricing(item)
+        let repo = repository
+        writeQueue.async { repo.upsertPricing(item) }
     }
 
     public func saveAllPricing() {
-        repository.savePricing(pricing)
+        let repo = repository
+        let snapshot = pricing
+        writeQueue.async { repo.savePricing(snapshot) }
     }
 
     public func setBudget(_ item: BudgetRule) {
@@ -303,12 +341,15 @@ public final class UsageStore: ObservableObject {
             budgets.append(item)
             budgets = Self.orderedBudgets(budgets)
         }
-        repository.upsertBudget(item)
+        let repo = repository
+        writeQueue.async { repo.upsertBudget(item) }
     }
 
     public func saveAllBudgets() {
         budgets = Self.orderedBudgets(budgets)
-        repository.saveBudgets(budgets)
+        let repo = repository
+        let snapshot = budgets
+        writeQueue.async { repo.saveBudgets(snapshot) }
     }
 
     public static func defaultSources() -> [UsageSource] {

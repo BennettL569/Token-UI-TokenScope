@@ -1,0 +1,317 @@
+import Foundation
+
+public enum LocalUsageParser {
+    public static func parseClaudeLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        guard let object = parseJSONObject(line),
+              string(object["type"]) == "assistant",
+              let message = object["message"] as? [String: Any],
+              let usage = message["usage"] as? [String: Any] else { return nil }
+        let input = int(usage["input_tokens"])
+        let output = int(usage["output_tokens"])
+        let cacheCreation = int(usage["cache_creation_input_tokens"])
+        let cacheRead = int(usage["cache_read_input_tokens"])
+        let cacheCreationDetail = usage["cache_creation"] as? [String: Any]
+        let cacheDetailSum = int(cacheCreationDetail?["ephemeral_1h_input_tokens"]) + int(cacheCreationDetail?["ephemeral_5m_input_tokens"])
+        let cache = cacheCreation + cacheRead + cacheDetailSum
+        guard input + output + cache > 0 else { return nil }
+        let timestamp = parseDate(string(object["timestamp"])) ?? Date()
+        let model = string(message["model"]) ?? "unknown"
+        let requestId = string(message["id"]) ?? string(object["uuid"])
+        var record = UsageRecord(source: .claudeCode, accountId: "ClaudeCode Local", apiKeyHash: "local-claude-code", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: requestId, rawSource: filePath)
+        record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
+        return record
+    }
+
+    public static func parseCodexLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        guard let object = parseJSONObject(line),
+              string(object["type"]) == "event_msg",
+              let payload = object["payload"] as? [String: Any],
+              string(payload["type"]) == "token_count",
+              let info = payload["info"] as? [String: Any] else { return nil }
+        let usage = (info["last_token_usage"] as? [String: Any]) ?? (info["total_token_usage"] as? [String: Any])
+        guard let usage else { return nil }
+        let input = int(usage["input_tokens"])
+        let output = int(usage["output_tokens"]) + int(usage["reasoning_output_tokens"])
+        let cache = int(usage["cached_input_tokens"])
+        guard input + output + cache > 0 else { return nil }
+        let timestamp = parseDate(string(object["timestamp"])) ?? Date()
+        let model = "codex"
+        var record = UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: "\(filePath)#\(timestamp.timeIntervalSince1970)#\(input)#\(output)#\(cache)", rawSource: filePath)
+        record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
+        return record
+    }
+
+    public static func parseOpenClawLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        guard let object = parseJSONObject(line) else { return nil }
+        var message = object["message"] as? [String: Any]
+        if message == nil, let data = object["data"] as? [String: Any], let snapshot = data["messagesSnapshot"] as? [[String: Any]] {
+            message = snapshot.last { $0["usage"] != nil }
+        }
+        guard let message, let usage = message["usage"] as? [String: Any] else { return nil }
+        let input = int(usage["input"])
+        let output = int(usage["output"])
+        let cache = int(usage["cacheRead"]) + int(usage["cacheWrite"])
+        guard input + output + cache > 0 else { return nil }
+        let timestamp = parseDate(string(object["timestamp"]) ?? string(object["ts"])) ?? Date(timeIntervalSince1970: Double(int(message["timestamp"])) / 1000.0)
+        let model = string(message["model"]) ?? string(object["modelId"]) ?? "openclaw"
+        var record = UsageRecord(source: .openClaw, accountId: string(object["sessionKey"]) ?? "OpenClaw Local", apiKeyHash: string(message["provider"]) ?? string(object["provider"]) ?? "local-openclaw", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: string(object["id"]) ?? string(object["runId"]), rawSource: filePath)
+        if let cost = usage["cost"] as? [String: Any], let total = decimal(cost["total"]) { record.estimatedCost = total } else { record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing) }
+        return record
+    }
+
+    public static func parseHermesSessionRow(id: String, source: String?, userId: String?, model: String?, activityAt: Double, input: Int, output: Int, cacheRead: Int, cacheWrite: Int, reasoning: Int, cost: Double?, provider: String?, pricing: [ModelPricing]) -> UsageRecord? {
+        let outputWithReasoning = output + reasoning
+        let cache = cacheRead + cacheWrite
+        guard input + outputWithReasoning + cache > 0 else { return nil }
+        var record = UsageRecord(source: .hermes, accountId: userId ?? source ?? "Hermes Local", apiKeyHash: provider ?? "local-hermes", model: model ?? "unknown", timestamp: Date(timeIntervalSince1970: activityAt), inputTokens: input, outputTokens: outputWithReasoning, cacheTokens: cache, estimatedCost: cost.map { Decimal($0) } ?? 0, requestId: id, rawSource: "~/.hermes/state.db:sessions")
+        if record.estimatedCost == 0 { record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing) }
+        return record
+    }
+
+    public static func parseOpenCodeMessageRow(id: String, sessionId: String, timeCreated: Double, data: String, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
+        guard let object = parseJSONObject(data) else { return nil }
+        let usage = firstUsageDictionary(in: object)
+        let input = intFromKeys(usage, ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "input"])
+        let output = intFromKeys(usage, ["outputTokens", "output_tokens", "completionTokens", "completion_tokens", "output"])
+            + intFromKeys(usage, ["reasoningTokens", "reasoning_tokens", "reasoningOutputTokens", "reasoning_output_tokens", "reasoning"])
+        let cacheDict = usage["cache"] as? [String: Any]
+        let cacheRead = intFromKeys(usage, ["cacheReadTokens", "cache_read_tokens", "cachedInputTokens", "cached_input_tokens", "cacheRead"])
+            + intFromKeys(cacheDict ?? [:], ["read", "cacheRead", "cache_read_tokens", "cachedInputTokens", "cached_input_tokens"])
+        let cacheWrite = intFromKeys(usage, ["cacheWriteTokens", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheWrite"])
+            + intFromKeys(cacheDict ?? [:], ["write", "cacheWrite", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"])
+        let cache = cacheRead + cacheWrite
+        guard input + output + cache > 0 else { return nil }
+        let provider = stringFromKeys(object, ["provider", "providerID", "providerId"])
+            ?? stringFromKeys(usage, ["provider", "providerID", "providerId"])
+        let model = stringFromKeys(object, ["model", "modelID", "modelId"])
+            ?? stringFromKeys(usage, ["model", "modelID", "modelId"])
+            ?? "opencode"
+        let timestamp = parseDate(stringFromKeys(object, ["timeCreated", "time_created", "timestamp", "createdAt"]))
+            ?? Date(timeIntervalSince1970: normalizedEpoch(timeCreated))
+        let requestId = stringFromKeys(object, ["id", "requestId", "request_id"]) ?? id
+        var record = UsageRecord(source: .openCode, accountId: sessionId, apiKeyHash: provider ?? "local-opencode", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: requestId, rawSource: rawSource)
+        if let cost = decimalFromKeys(usage, ["cost", "costUSD", "cost_usd", "estimatedCost", "estimated_cost"]) {
+            record.estimatedCost = cost
+        } else {
+            record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
+        }
+        return record
+    }
+
+    private static func parseJSONObject(_ line: String) -> [String: Any]? {
+        guard let data = line.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    static func string(_ value: Any?) -> String? {
+        if let value = value as? String, !value.isEmpty { return value }
+        return nil
+    }
+
+    static func int(_ value: Any?) -> Int {
+        if let value = value as? Int { return value }
+        if let value = value as? Double { return Int(value) }
+        if let value = value as? String { return Int(value) ?? 0 }
+        return 0
+    }
+
+    static func decimal(_ value: Any?) -> Decimal? {
+        if let value = value as? Double { return Decimal(value) }
+        if let value = value as? Int { return Decimal(value) }
+        if let value = value as? String { return Decimal(string: value) }
+        return nil
+    }
+
+    static func parseDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: value) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: value)
+    }
+
+    private static func normalizedEpoch(_ value: Double) -> Double {
+        value > 10_000_000_000 ? value / 1000.0 : value
+    }
+
+    private static func firstUsageDictionary(in value: Any?) -> [String: Any] {
+        if let dict = value as? [String: Any] {
+            for key in ["usage", "tokens", "tokenUsage", "token_usage", "cost"] {
+                if let usage = dict[key] as? [String: Any] { return usage }
+            }
+            for nested in dict.values {
+                let found = firstUsageDictionary(in: nested)
+                if !found.isEmpty { return found }
+            }
+        } else if let array = value as? [Any] {
+            for item in array {
+                let found = firstUsageDictionary(in: item)
+                if !found.isEmpty { return found }
+            }
+        }
+        return [:]
+    }
+
+    private static func intFromKeys(_ dict: [String: Any], _ keys: [String]) -> Int {
+        for key in keys {
+            let value = int(dict[key])
+            if value != 0 { return value }
+        }
+        return 0
+    }
+
+    private static func decimalFromKeys(_ dict: [String: Any], _ keys: [String]) -> Decimal? {
+        for key in keys {
+            if let value = decimal(dict[key]) { return value }
+        }
+        return nil
+    }
+
+    private static func stringFromKeys(_ dict: [String: Any], _ keys: [String]) -> String? {
+        for key in keys {
+            if let value = string(dict[key]) { return value }
+        }
+        return nil
+    }
+
+}
+
+public struct LocalJSONLUsageAdapter: UsageAdapter {
+    public let id: String
+    public let tool: ToolKind
+    public let displayName: String
+    public let capabilities: AdapterCapabilities = [.supportsLocalLogs, .supportsImport, .supportsCostEstimation]
+    private let defaultGlobPatterns: [String]
+    private let parser: @Sendable (String, String, [ModelPricing]) -> UsageRecord?
+
+    public init(tool: ToolKind, displayName: String, defaultGlobPatterns: [String], parser: @escaping @Sendable (String, String, [ModelPricing]) -> UsageRecord?) {
+        self.id = tool.rawValue.lowercased() + "-local-jsonl"
+        self.tool = tool
+        self.displayName = displayName
+        self.defaultGlobPatterns = defaultGlobPatterns
+        self.parser = parser
+    }
+
+    public func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore? = nil, fullScan: Bool = false) async throws -> [UsageRecord] {
+        guard source.isEnabled else { throw AdapterError.sourceDisabled }
+        let paths = FileDiscovery.expand(paths: source.localLogPath.isEmpty ? defaultGlobPatterns : [source.localLogPath])
+        var records: [UsageRecord] = []
+        for path in paths {
+            guard let stream = InputStream(fileAtPath: path) else { continue }
+            stream.open()
+            defer { stream.close() }
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.int64Value ?? 0
+            let rawCursor = fullScan ? 0 : Int64(cursorStore?.refreshCursor(source: tool, rawSource: path) ?? 0)
+            let startOffset = max(0, min(rawCursor, fileSize))
+            if startOffset > 0 { skipBytes(startOffset, in: stream) }
+            let reader = LineReader(stream: stream)
+            while let line = reader.nextLine() {
+                if let record = parser(line, path, pricing) { records.append(record) }
+            }
+            cursorStore?.setRefreshCursor(source: tool, rawSource: path, position: Double(fileSize))
+        }
+        return records
+    }
+
+    private func skipBytes(_ count: Int64, in stream: InputStream) {
+        guard count > 0 else { return }
+        var remaining = count
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while remaining > 0 {
+            let toRead = min(chunk.count, Int(remaining))
+            let read = stream.read(&chunk, maxLength: toRead)
+            if read <= 0 { break }
+            remaining -= Int64(read)
+        }
+    }
+}
+
+public enum FileDiscovery {
+    public static func expand(paths: [String]) -> [String] {
+        var results: [String] = []
+        let maxFilesPerPattern = 2_000
+        for raw in paths {
+            let expanded = NSString(string: raw).expandingTildeInPath
+            if let globbed = expandGlob(expanded, limit: maxFilesPerPattern) {
+                results.append(contentsOf: globbed)
+                continue
+            }
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue {
+                results.append(contentsOf: enumerateFiles(root: expanded, limit: maxFilesPerPattern))
+            } else {
+                results.append(expanded)
+            }
+        }
+        return Array(Set(results)).filter { FileManager.default.fileExists(atPath: $0) }.sorted()
+    }
+
+    private static func expandGlob(_ pattern: String, limit: Int) -> [String]? {
+        if let recursiveRange = pattern.range(of: "/**/") {
+            let root = String(pattern[..<recursiveRange.lowerBound])
+            let suffix = String(pattern[recursiveRange.upperBound...])
+            guard suffix.hasPrefix("*.") else { return nil }
+            let ext = String(suffix.dropFirst(1))
+            return enumerateFiles(root: root, extensions: [ext], limit: limit)
+        }
+        guard pattern.contains("*") else { return nil }
+        let ns = pattern as NSString
+        let dir = ns.deletingLastPathComponent
+        let last = ns.lastPathComponent
+        guard last.hasPrefix("*.") else { return nil }
+        let ext = String(last.dropFirst(1))
+        return enumerateFiles(root: dir, extensions: [ext], limit: limit, recursive: false)
+    }
+
+    private static func enumerateFiles(root: String, extensions: [String] = [".jsonl", ".json", ".db", ".sqlite", ".sqlite3"], limit: Int, recursive: Bool = true) -> [String] {
+        guard FileManager.default.fileExists(atPath: root) else { return [] }
+        var results: [String] = []
+        if recursive {
+            guard let enumerator = FileManager.default.enumerator(atPath: root) else { return [] }
+            for case let file as String in enumerator {
+                if extensions.contains(where: { file.hasSuffix($0) }) {
+                    results.append((root as NSString).appendingPathComponent(file))
+                    if results.count >= limit { break }
+                }
+            }
+        } else if let files = try? FileManager.default.contentsOfDirectory(atPath: root) {
+            for file in files where extensions.contains(where: { file.hasSuffix($0) }) {
+                results.append((root as NSString).appendingPathComponent(file))
+                if results.count >= limit { break }
+            }
+        }
+        return results.sorted()
+    }
+}
+
+final class LineReader {
+    private let stream: InputStream
+    private var buffer = Data()
+    private var eof = false
+
+    init(stream: InputStream) { self.stream = stream }
+
+    func nextLine() -> String? {
+        while true {
+            if let range = buffer.firstRange(of: Data([0x0A])) {
+                let lineData = buffer.subdata(in: 0..<range.lowerBound)
+                buffer.removeSubrange(0..<range.upperBound)
+                return String(data: lineData, encoding: .utf8)
+            }
+            if eof {
+                if buffer.isEmpty { return nil }
+                let line = String(data: buffer, encoding: .utf8)
+                buffer.removeAll()
+                return line
+            }
+            var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+            let read = stream.read(&chunk, maxLength: chunk.count)
+            if read > 0 {
+                buffer.append(chunk, count: read)
+            } else {
+                eof = true
+            }
+        }
+    }
+}

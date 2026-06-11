@@ -24,30 +24,31 @@ public actor UsageRepository {
     }
 }
 
-public final class UsageStore: ObservableObject {
-    @Published public private(set) var records: [UsageRecord] = [] {
-        didSet { invalidateAggregateCaches() }
-    }
+// `@unchecked Sendable`: the store is a main-thread-confined UI hub. Its mutable `@Published`
+// state is only read/written on the main thread; the only background work (the dashboard
+// aggregation) reads an immutable Sendable input snapshot and applies its result back on main.
+public final class UsageStore: ObservableObject, @unchecked Sendable {
+    @Published public private(set) var records: [UsageRecord] = []
     @Published public private(set) var dashboardSnapshot = DashboardSnapshot()
     @Published public var sources: [UsageSource]
     @Published public var pricing: [ModelPricing]
     @Published public var budgets: [BudgetRule] {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var selectedRange: TimeRange = .today {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var usesCustomDateRange = false {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var customDateRange: CustomDateRange {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var searchText: String = "" {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var selectedTool: ToolKind? {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
     @Published public var errorMessage: String?
     @Published public var isRefreshing = false
@@ -62,7 +63,7 @@ public final class UsageStore: ObservableObject {
     }
     @Published public var refreshProgress: String = ""
     @Published public var budgetProgressMode: BudgetProgressMode = .tokens {
-        didSet { rebuildDashboardSnapshot() }
+        didSet { scheduleDashboardRebuild() }
     }
 
     private let repository: PersistentUsageRepository
@@ -81,37 +82,17 @@ public final class UsageStore: ObservableObject {
         language.select(english, chinese)
     }
 
-    /// Filter-independent aggregates (today / week / month / all). These depend only on
-    /// `records` and the current calendar day — NOT on searchText / selectedTool /
-    /// selectedRange — so they are cached and reused across the frequent filter changes
-    /// instead of re-walking the entire record set on every keystroke.
-    private struct BaseAggregateCache {
-        var day: Date
-        var today: AggregatedUsage
-        var week: AggregatedUsage
-        var month: AggregatedUsage
-        var all: AggregatedUsage
-    }
-    private var baseAggregateCache: BaseAggregateCache?
-
-    /// Trend buckets depend only on the active range (+ records + day), not on
-    /// searchText / selectedTool, so they are cached keyed by the active range.
-    private struct TrendCache {
-        var key: String
-        var buckets: [TrendBucket]
-    }
-    private var trendCache: TrendCache?
+    /// Monotonic id for the latest scheduled dashboard rebuild. Filter changes (range / custom
+    /// date / search / tool / budget) run the heavy aggregation off the main thread; only the
+    /// newest generation's result is published, so superseded results are discarded. Walking the
+    /// full record set therefore never blocks the UI, no matter how large the dataset is.
+    private var rebuildGeneration = 0
 
     /// Serial queue for pricing/budget persistence. The pricing and budget tables are
     /// edited via SwiftUI bindings that fire on every keystroke; writing them through this
     /// queue keeps the SQLite work off the main thread while still serializing writes so the
     /// last edit wins. The repository itself is internally locked and Sendable.
     private let writeQueue = DispatchQueue(label: "com.tokenscope.repository-write", qos: .utility)
-
-    private func invalidateAggregateCaches() {
-        baseAggregateCache = nil
-        trendCache = nil
-    }
 
     public init(repository: PersistentUsageRepository = PersistentUsageRepository(), registry: AdapterRegistry = AdapterRegistry()) {
         self.repository = repository
@@ -244,56 +225,97 @@ public final class UsageStore: ObservableObject {
         AggregationEngine.trend(records: records, range: selectedRange, customRange: usesCustomDateRange ? customDateRange : nil, now: now)
     }
 
+    /// Synchronous rebuild used at init, after a refresh, and by tests. Bumps the generation so an
+    /// in-flight off-main rebuild's (now stale) result is discarded instead of overwriting this.
     public func rebuildDashboardSnapshot(now: Date = Date()) {
+        rebuildGeneration &+= 1
+        dashboardSnapshot = Self.computeSnapshot(snapshotInputs(now: now))
+    }
+
+    /// Schedules a dashboard rebuild OFF the main thread, coalescing rapid filter changes so only
+    /// the latest one is published. This is what every filter `didSet` calls: walking the full
+    /// record set (Calendar-heavy trend bucketing, Decimal accumulation) no longer blocks the
+    /// main thread, so changing the range / dates / search / tool never drops frames.
+    private func scheduleDashboardRebuild() {
+        rebuildGeneration &+= 1
+        let generation = rebuildGeneration
+        let input = snapshotInputs(now: Date())
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let snapshot = UsageStore.computeSnapshot(input)
+            DispatchQueue.main.async {
+                guard let self, self.rebuildGeneration == generation else { return }
+                self.dashboardSnapshot = snapshot
+            }
+        }
+    }
+
+    private func snapshotInputs(now: Date) -> SnapshotInputs {
+        SnapshotInputs(
+            records: records,
+            selectedRange: selectedRange,
+            customRange: usesCustomDateRange ? customDateRange : nil,
+            searchText: searchText,
+            selectedTool: selectedTool,
+            budgets: budgets,
+            budgetProgressMode: budgetProgressMode,
+            now: now
+        )
+    }
+
+    /// All inputs the dashboard snapshot depends on. Sendable, so the computation can run inside a
+    /// detached task off the main actor.
+    private struct SnapshotInputs: Sendable {
+        let records: [UsageRecord]
+        let selectedRange: TimeRange
+        let customRange: CustomDateRange?
+        let searchText: String
+        let selectedTool: ToolKind?
+        let budgets: [BudgetRule]
+        let budgetProgressMode: BudgetProgressMode
+        let now: Date
+    }
+
+    private struct BaseAggregates {
+        var today: AggregatedUsage
+        var week: AggregatedUsage
+        var month: AggregatedUsage
+        var all: AggregatedUsage
+    }
+
+    /// Pure dashboard computation over a Sendable input snapshot. Safe to run off the main actor.
+    private static func computeSnapshot(_ input: SnapshotInputs) -> DashboardSnapshot {
         let calendar = Calendar.current
-        let customRange = usesCustomDateRange ? customDateRange : nil
-        let selectedRangeForSnapshot = selectedRange
-        let selectedToolForSnapshot = selectedTool
-        let searchTextForSnapshot = searchText
+        let now = input.now
+        let records = input.records
+        let customRange = input.customRange
 
-        // (1) Filter-independent aggregates — cached per (records, calendar day). These do
-        // not depend on the active range / tool / search text, so a keystroke in the search
-        // field reuses them instead of re-walking the record set four more times.
-        let base: BaseAggregateCache
-        if let cached = baseAggregateCache, calendar.isDate(cached.day, inSameDayAs: now) {
-            base = cached
-        } else {
-            base = Self.computeBaseAggregates(records: records, now: now, calendar: calendar)
-            baseAggregateCache = base
-        }
+        // (1) Filter-independent aggregates (today / week / month / all) in one bounds pass.
+        let base = computeBaseAggregates(records: records, now: now, calendar: calendar)
 
-        // (2) Trend — depends only on the active range (+ records + day). Cached by range key,
-        // so it is not recomputed when only searchText / selectedTool change.
-        let trendKey = Self.trendCacheKey(range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
-        let trend: [TrendBucket]
-        if let cached = trendCache, cached.key == trendKey {
-            trend = cached.buckets
-        } else {
-            trend = AggregationEngine.trend(records: records, range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
-            trendCache = TrendCache(key: trendKey, buckets: trend)
-        }
+        // (2) Trend for the active range.
+        let trend = AggregationEngine.trend(records: records, range: input.selectedRange, customRange: customRange, now: now, calendar: calendar)
 
-        // (3) Filter-dependent values — computed in a single pass over `records` using
-        // precomputed active-range bounds (cheap timestamp comparisons) instead of a
-        // per-record Calendar membership call. `records` is ordered newest-first, so the
-        // first six matches are the most recent ones (matching the previous prefix(6)).
-        let bounds = ActiveRangeBounds(range: selectedRangeForSnapshot, customRange: customRange, now: now, calendar: calendar)
-        let hasSearch = !searchTextForSnapshot.isEmpty
+        // (3) Filter-dependent values in a single pass using precomputed active-range bounds.
+        // `records` is ordered newest-first, so the first six matches are the most recent ones.
+        let bounds = ActiveRangeBounds(range: input.selectedRange, customRange: customRange, now: now, calendar: calendar)
+        let search = input.searchText
+        let hasSearch = !search.isEmpty
+        let selectedTool = input.selectedTool
         var selected = AggregatedUsage()
         var toolGroups: [ToolKind: AggregatedUsage] = [:]
         var recentRecords: [UsageRecord] = []
         recentRecords.reserveCapacity(6)
         for record in records {
             guard bounds.contains(record.timestamp) else { continue }
-            if let selectedToolForSnapshot, selectedToolForSnapshot != record.source { continue }
+            if let selectedTool, selectedTool != record.source { continue }
             if hasSearch {
-                guard record.accountId.localizedCaseInsensitiveContains(searchTextForSnapshot)
-                    || record.model.localizedCaseInsensitiveContains(searchTextForSnapshot)
-                    || record.apiKeyHash.localizedCaseInsensitiveContains(searchTextForSnapshot) else { continue }
+                guard record.accountId.localizedCaseInsensitiveContains(search)
+                    || record.model.localizedCaseInsensitiveContains(search)
+                    || record.apiKeyHash.localizedCaseInsensitiveContains(search) else { continue }
             }
-            Self.accumulate(&selected, record)
+            accumulate(&selected, record)
             var group = toolGroups[record.source] ?? AggregatedUsage()
-            Self.accumulate(&group, record)
+            accumulate(&group, record)
             toolGroups[record.source] = group
             if recentRecords.count < 6 { recentRecords.append(record) }
         }
@@ -303,18 +325,15 @@ public final class UsageStore: ObservableObject {
             .weekly: base.week,
             .monthly: base.month
         ]
-        let budgetRows = budgets.map { rule in
-            BudgetProgressSnapshot(rule: rule, usage: usageByBudgetPeriod[rule.period] ?? AggregatedUsage(), mode: budgetProgressMode)
+        let budgetRows = input.budgets.map { rule in
+            BudgetProgressSnapshot(rule: rule, usage: usageByBudgetPeriod[rule.period] ?? AggregatedUsage(), mode: input.budgetProgressMode)
         }
-        dashboardSnapshot = DashboardSnapshot(today: base.today, week: base.week, month: base.month, selected: selected, all: base.all, trend: trend, toolGroups: toolGroups, recentRecords: recentRecords, budgetRows: budgetRows)
+        return DashboardSnapshot(today: base.today, week: base.week, month: base.month, selected: selected, all: base.all, trend: trend, toolGroups: toolGroups, recentRecords: recentRecords, budgetRows: budgetRows)
     }
 
-    /// Computes the filter-independent today/week/month/all aggregates in a single pass using
-    /// precomputed half-open bounds (cheap `Date` comparisons) instead of four separate
-    /// `Calendar`-membership passes. The bounds are derived to match `TimeRange.contains`
-    /// exactly, so the result is identical to the previous `AggregationEngine.aggregate` calls
-    /// — just far cheaper over large record sets, which is what the dashboard rebuild walks.
-    private static func computeBaseAggregates(records: [UsageRecord], now: Date, calendar: Calendar) -> BaseAggregateCache {
+    /// Computes today/week/month/all in a single pass using precomputed half-open bounds (cheap
+    /// `Date` comparisons), matching `TimeRange.contains` exactly.
+    private static func computeBaseAggregates(records: [UsageRecord], now: Date, calendar: Calendar) -> BaseAggregates {
         let todayBounds = ActiveRangeBounds(range: .today, customRange: nil, now: now, calendar: calendar)
         let weekBounds = ActiveRangeBounds(range: .week, customRange: nil, now: now, calendar: calendar)
         let monthBounds = ActiveRangeBounds(range: .month, customRange: nil, now: now, calendar: calendar)
@@ -329,7 +348,7 @@ public final class UsageStore: ObservableObject {
             if weekBounds.contains(timestamp) { accumulate(&week, record) }
             if monthBounds.contains(timestamp) { accumulate(&month, record) }
         }
-        return BaseAggregateCache(day: now, today: today, week: week, month: month, all: all)
+        return BaseAggregates(today: today, week: week, month: month, all: all)
     }
 
     private static func accumulate(_ aggregate: inout AggregatedUsage, _ record: UsageRecord) {
@@ -338,14 +357,6 @@ public final class UsageStore: ObservableObject {
         aggregate.cacheTokens += record.cacheTokens
         aggregate.totalTokens += record.totalTokens
         aggregate.estimatedCost += record.estimatedCost
-    }
-
-    private static func trendCacheKey(range: TimeRange, customRange: CustomDateRange?, now: Date, calendar: Calendar) -> String {
-        let day = calendar.startOfDay(for: now).timeIntervalSince1970
-        if let customRange {
-            return "custom|\(customRange.start.timeIntervalSince1970)|\(customRange.end.timeIntervalSince1970)|\(day)"
-        }
-        return "range|\(range.rawValue)|\(day)"
     }
 
     public func activeRangeContains(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {

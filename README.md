@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.0-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.1-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -140,7 +140,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 23 checks passed
+#    expected: TokenScopeCoreTestsRunner: 24 checks passed
 
 # 2) Swift Testing suite
 swift test
@@ -294,7 +294,7 @@ The app does heavy work (parsing potentially **gigabytes** of local logs) withou
 
 - **Parsing** — JSONL parsers gate on a cheap substring before the full JSON decode (e.g. only Codex `token_count` lines are decoded), and the ISO-8601 date formatters are created once instead of per line. Together these cut a multi-gigabyte rescan from minutes toward seconds of CPU.
 - **Persistence** — batch upserts reuse one prepared statement inside a single transaction instead of re-compiling SQL and running an implicit transaction per row.
-- **Dashboard snapshot** — filter-independent aggregates (today/week/month/all) and the trend are cached (invalidated when records change or the day rolls over); the base aggregates are computed in one precomputed-bounds pass instead of several `Calendar`-membership passes, and the search field is debounced so typing no longer triggers an O(records) rebuild per keystroke.
+- **Dashboard snapshot** — the snapshot (base today/week/month/all aggregates, trend bucketing, and the filtered selection) is recomputed **off the main thread and coalesced**, so changing the range, custom dates, search or tool never blocks the UI — a filter change costs ~0 ms on the main thread instead of ~25–30 ms over a large record set. The base aggregates use one precomputed-bounds pass instead of several `Calendar`-membership passes, and the search field and custom date pickers are debounced to avoid spawning redundant background recomputes.
 - **Off-main refresh/persistence** — log parsing, upsert, full-table reload and widget-summary aggregation run off the main thread, so launch/refresh and the one-time corrective rescan never freeze the UI.
 - **Window configuration** — windows are configured once instead of on every AppKit `applicationDidUpdate` tick.
 
@@ -338,6 +338,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.1** | Fix dropped frames when changing the time range or custom dates: the dashboard snapshot is recomputed off the main thread (coalesced), so a filter change costs ~0 ms on the main thread instead of ~25–30 ms. Also debounce the date pickers and precompute custom-range bounds. |
 | **v1.1.0** | Bilingual UI (English default + 中文, live switch). Token-accuracy fixes (Claude cache double-count; Codex cached/reasoning de-dup) with a one-time corrective rescan. Fix WAL-mode SQLite read-only open that silently dropped OpenCode/Hermes usage. Faster rescans (substring-gated parsing, cached date formatters, batched transactional upserts, single-pass base aggregates, debounced search). |
 | **v1.0.1** | Performance: eliminate dashboard frame drops (snapshot caching + single-pass + precomputed bounds); configure windows once; move refresh/persistence off the main thread. |
 | **v1.0.0** | Initial release: 5-tool adapters, SQLite persistence, cost estimation, budgets, export, menu bar, WidgetKit source. |

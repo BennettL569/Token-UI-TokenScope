@@ -124,6 +124,12 @@ struct RangeFilterBar: View {
     /// `searchText` (which drives the full-record-set dashboard rebuild) is only updated after
     /// a short pause, so fast typing no longer triggers an O(records) rebuild per keystroke.
     @State private var searchDraft = ""
+    /// Local mirror of the custom date pickers. Picking/scrubbing a date updates these instantly
+    /// (the pickers stay responsive), but the store's `customDateRange` — which invalidates the
+    /// trend cache and rebuilds the dashboard over the whole record set — is only updated after a
+    /// short pause, so adjusting the range no longer rebuilds on every intermediate value.
+    @State private var customStartDraft = Date()
+    @State private var customEndDraft = Date()
 
     var body: some View {
         GlassPanel {
@@ -154,16 +160,28 @@ struct RangeFilterBar: View {
                         Text(lang.select("Custom Range", "自定义范围"))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Color.scopeTextMuted)
-                        DatePicker(lang.select("Start", "开始"), selection: Binding(get: { store.customDateRange.start }, set: { store.customDateRange = CustomDateRange(start: $0, end: store.customDateRange.end) }), displayedComponents: .date)
+                        DatePicker(lang.select("Start", "开始"), selection: $customStartDraft, displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .frame(width: 142)
                         Text(lang.select("to", "至"))
                             .font(.caption)
                             .foregroundStyle(Color.scopeTextMuted)
-                        DatePicker(lang.select("End", "结束"), selection: Binding(get: { store.customDateRange.end }, set: { store.customDateRange = CustomDateRange(start: store.customDateRange.start, end: $0) }), displayedComponents: .date)
+                        DatePicker(lang.select("End", "结束"), selection: $customEndDraft, displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .frame(width: 142)
                         Spacer(minLength: 0)
+                    }
+                    .onAppear {
+                        customStartDraft = store.customDateRange.start
+                        customEndDraft = store.customDateRange.end
+                    }
+                    .task(id: "\(customStartDraft.timeIntervalSince1970)|\(customEndDraft.timeIntervalSince1970)") {
+                        // Debounce: a new date value cancels this task before the sleep elapses,
+                        // so only the value the user settles on triggers a dashboard rebuild.
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        guard !Task.isCancelled else { return }
+                        let next = CustomDateRange(start: customStartDraft, end: customEndDraft)
+                        if store.customDateRange != next { store.customDateRange = next }
                     }
                 }
 

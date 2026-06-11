@@ -43,6 +43,20 @@ struct TokenScopeTests {
         #expect(NSDecimalNumber(decimal: usage.estimatedCost).doubleValue == 1)
     }
 
+    @Test func aggregationCustomRangeIncludesEndDayButNotNextDay() {
+        // Locks the custom-range boundary after the per-record→precomputed-bounds optimization:
+        // the end day is inclusive through 23:59:59 and the next day is excluded.
+        let calendar = Calendar(identifier: .gregorian)
+        let startOfDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let records = [
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: startOfDay.addingTimeInterval(60 * 60), inputTokens: 10, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "1"),
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: startOfDay.addingTimeInterval(23 * 60 * 60), inputTokens: 20, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "2"),
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: startOfDay.addingTimeInterval(25 * 60 * 60), inputTokens: 100, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "3")
+        ]
+        let usage = AggregationEngine.aggregate(records: records, range: .all, customRange: CustomDateRange(start: startOfDay, end: startOfDay), calendar: calendar)
+        #expect(usage.totalTokens == 30)
+    }
+
     @Test func aggregatedUsageReportsCacheHitRate() {
         let usage = AggregatedUsage(inputTokens: 75, outputTokens: 25, cacheTokens: 25, totalTokens: 125, estimatedCost: 0)
         #expect(usage.billableTokens == 100)
@@ -80,7 +94,9 @@ struct TokenScopeTests {
         #expect(store.dashboardSnapshot.all.totalTokens == 385)
         #expect(store.dashboardSnapshot.selected.totalTokens == 35)
 
+        // Filter changes rebuild the snapshot off the main thread; force it synchronously here.
         store.selectedRange = .all
+        store.rebuildDashboardSnapshot()
         #expect(store.dashboardSnapshot.selected.totalTokens == 385)
         #expect(store.dashboardSnapshot.recentRecords.count == 2)
     }
@@ -104,27 +120,32 @@ struct TokenScopeTests {
         #expect(store.dashboardSnapshot.recentRecords.count == 3)
 
         // Search by account substring → only the two "alpha" hermes rows (35 + 6 = 41).
+        // Filter changes rebuild the snapshot off the main thread; force it synchronously here.
         store.searchText = "alpha"
+        store.rebuildDashboardSnapshot()
         #expect(store.dashboardSnapshot.selected.totalTokens == 41)
         #expect(store.dashboardSnapshot.toolGroups.count == 1)
         #expect(store.dashboardSnapshot.toolGroups[.hermes]?.totalTokens == 41)
-        // Base aggregates remain correct (served from cache) while filters change.
+        // Base aggregates remain correct while filters change.
         #expect(store.dashboardSnapshot.today.totalTokens == 391)
 
         // Search by model substring → only the codeX row (350).
         store.searchText = "gpt-5-mini"
+        store.rebuildDashboardSnapshot()
         #expect(store.dashboardSnapshot.selected.totalTokens == 350)
         #expect(store.dashboardSnapshot.toolGroups[.codeX]?.totalTokens == 350)
 
         // Tool filter (no search) → only codeX (350).
         store.searchText = ""
         store.selectedTool = .codeX
+        store.rebuildDashboardSnapshot()
         #expect(store.dashboardSnapshot.selected.totalTokens == 350)
         #expect(store.dashboardSnapshot.recentRecords.count == 1)
 
         // Clearing filters and widening the range restores the full set.
         store.selectedTool = nil
         store.selectedRange = .all
+        store.rebuildDashboardSnapshot()
         #expect(store.dashboardSnapshot.selected.totalTokens == 391)
         #expect(store.dashboardSnapshot.recentRecords.count == 3)
         #expect(store.dashboardSnapshot.all.totalTokens == 391)

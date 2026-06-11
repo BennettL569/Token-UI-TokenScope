@@ -49,7 +49,12 @@ public enum BudgetEngine {
 public enum AggregationEngine {
     private static func filteredRecords(records: [UsageRecord], range: TimeRange, customRange: CustomDateRange?, now: Date, calendar: Calendar) -> [UsageRecord] {
         if let customRange {
-            return records.filter { customRange.contains($0.timestamp, calendar: calendar) }
+            // Precompute the [startOfDay(start), 23:59:59(end)] bounds once instead of letting
+            // `CustomDateRange.contains` recompute them for every record — the trend recompute
+            // (triggered on every custom-date change) walks the whole record set here.
+            let start = calendar.startOfDay(for: customRange.start)
+            let end = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: customRange.end) ?? customRange.end
+            return records.filter { $0.timestamp >= start && $0.timestamp <= end }
         }
         return records.filter { range.contains($0.timestamp, calendar: calendar, now: now) }
     }

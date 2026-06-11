@@ -11,6 +11,7 @@ struct TokenScopeCoreTestsRunner {
         try maskingDoesNotExposeFullAPIKey()
         try aggregationFiltersToday()
         try aggregationFiltersCustomDateRange()
+        try aggregationCustomRangeIncludesEndDayButNotNextDay()
         try budgetAlertLevels()
         try exportRedactsIdentifiersByDefault()
         try await repositoryDeduplicatesRecords()
@@ -28,7 +29,7 @@ struct TokenScopeCoreTestsRunner {
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 23 checks passed")
+        print("TokenScopeCoreTestsRunner: 24 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -86,6 +87,23 @@ struct TokenScopeCoreTestsRunner {
         let usage = AggregationEngine.aggregate(records: records, range: .all, customRange: CustomDateRange(start: start, end: end), calendar: calendar)
         try expect(usage.totalTokens == 35, "custom range aggregation total mismatch")
         try expect(NSDecimalNumber(decimal: usage.estimatedCost).doubleValue == 1, "custom range aggregation cost mismatch")
+    }
+
+    static func aggregationCustomRangeIncludesEndDayButNotNextDay() throws {
+        // Locks the custom-range boundary after the per-record→precomputed-bounds optimization:
+        // the end day is inclusive through 23:59:59 and the next day is excluded.
+        let calendar = Calendar(identifier: .gregorian)
+        let startOfDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let earlyOnDay = startOfDay.addingTimeInterval(60 * 60)        // 01:00 same day → in
+        let lateOnDay = startOfDay.addingTimeInterval(23 * 60 * 60)    // 23:00 same day → in
+        let nextDay = startOfDay.addingTimeInterval(25 * 60 * 60)      // 01:00 next day → out
+        let records = [
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: earlyOnDay, inputTokens: 10, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "1"),
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: lateOnDay, inputTokens: 20, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "2"),
+            UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: nextDay, inputTokens: 100, outputTokens: 0, cacheTokens: 0, estimatedCost: 0, rawSource: "3")
+        ]
+        let usage = AggregationEngine.aggregate(records: records, range: .all, customRange: CustomDateRange(start: startOfDay, end: startOfDay), calendar: calendar)
+        try expect(usage.totalTokens == 30, "custom range boundary mismatch (expected same-day 10+20, next day excluded)")
     }
 
     static func budgetAlertLevels() throws {
@@ -351,27 +369,32 @@ struct TokenScopeCoreTestsRunner {
         try expect(store.dashboardSnapshot.recentRecords.count == 3, "snapshot recent count mismatch")
 
         // Search by account substring → only the two "alpha" hermes rows (35 + 6 = 41).
+        // Filter changes rebuild the snapshot off the main thread; tests force it synchronously.
         store.searchText = "alpha"
+        store.rebuildDashboardSnapshot()
         try expect(store.dashboardSnapshot.selected.totalTokens == 41, "search-by-account selected mismatch")
         try expect(store.dashboardSnapshot.toolGroups.count == 1, "search-by-account toolGroups should only contain hermes")
         try expect(store.dashboardSnapshot.toolGroups[.hermes]?.totalTokens == 41, "search-by-account hermes group mismatch")
-        // Base aggregates must remain correct (served from cache) while filters change.
+        // Base aggregates must remain correct while filters change.
         try expect(store.dashboardSnapshot.today.totalTokens == 391, "base today changed under search filter")
 
         // Search by model substring → only the codeX row (350).
         store.searchText = "gpt-5-mini"
+        store.rebuildDashboardSnapshot()
         try expect(store.dashboardSnapshot.selected.totalTokens == 350, "search-by-model selected mismatch")
         try expect(store.dashboardSnapshot.toolGroups[.codeX]?.totalTokens == 350, "search-by-model codeX group mismatch")
 
         // Tool filter (no search) → only codeX (350).
         store.searchText = ""
         store.selectedTool = .codeX
+        store.rebuildDashboardSnapshot()
         try expect(store.dashboardSnapshot.selected.totalTokens == 350, "tool-filter selected mismatch")
         try expect(store.dashboardSnapshot.recentRecords.count == 1, "tool-filter recent count mismatch")
 
         // Clearing filters and widening the range restores the full set.
         store.selectedTool = nil
         store.selectedRange = .all
+        store.rebuildDashboardSnapshot()
         try expect(store.dashboardSnapshot.selected.totalTokens == 391, "cleared-filter selected mismatch")
         try expect(store.dashboardSnapshot.recentRecords.count == 3, "cleared-filter recent count mismatch")
         try expect(store.dashboardSnapshot.all.totalTokens == 391, "base all changed across filter changes")

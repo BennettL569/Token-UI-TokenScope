@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.2-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.3-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -55,6 +55,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 - **Cost estimation** — per-million-token pricing; when a source already reports cost (Hermes, OpenClaw, OpenCode), the source-provided cost is preferred.
 - **Budget radar** — daily / weekly / monthly token and cost budgets, with a "by tokens" or "by cost" progress mode and 80% / 100% tiered alerts.
 - **Trends & distribution** — hour/day/month-bucketed trend chart, tool distribution and cache-hit rate.
+- **Cache-creation & request counts** — cache *creation* (write) is tracked separately from cache *read*, and request counts are aggregated per range/tool — surfaced on the dashboard, the Usage detail table and the tool distribution.
 - **Menu bar + widgets** — a `MenuBarExtra` mini panel (shows today's tokens or today's cost); WidgetKit widget source is included.
 - **Export** — CSV / JSON export that **redacts** account / API-key identifiers by default.
 
@@ -142,7 +143,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 24 checks passed
+#    expected: TokenScopeCoreTestsRunner: 26 checks passed
 
 # 2) Swift Testing suite
 swift test
@@ -262,7 +263,7 @@ cost = inputTokens  / 1_000_000 * inputPrice
      + cacheTokens  / 1_000_000 * cachePrice
 ```
 
-Matching order is `(tool, model)` → `(model)` → a hardcoded fallback. **Source-provided cost is preferred when present** (Hermes `estimated_cost_usd`, OpenClaw `usage.cost.total`, OpenCode cost fields). Money is `Decimal` internally, bridged to `Double` only for SQLite / SwiftUI. You can add/update model pricing on the **Pricing** screen (persisted to SQLite).
+Matching order is `(tool, model)` → `(model)` → a hardcoded fallback. **Source-provided cost is preferred when present** (Hermes `estimated_cost_usd`, OpenClaw `usage.cost.total`, OpenCode cost fields). Money is `Decimal` internally, bridged to `Double` only for SQLite / SwiftUI. You can add, update or delete model pricing on the **Pricing** screen (persisted to SQLite).
 
 Budget progress has two modes (toggle in-app):
 
@@ -340,6 +341,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.3** | New statistics: **cache creation** (write) tokens tracked separately from cache read, and **request counts** per range/tool — shown on the dashboard, the Usage detail table and the tool distribution. Adds an auto-migrated `cache_creation_tokens` column and a one-time backfill rescan on first launch. Also adds a **delete** action (with confirmation) to the Pricing screen so manually added prices can be removed. |
 | **v1.1.2** | Ship a **universal binary** (arm64 + x86_64) so the release runs on both Apple Silicon and Intel Macs. Update the install docs for macOS 15+/26 Gatekeeper (System Settings → Open Anyway / `xattr`). No code changes. |
 | **v1.1.1** | Fix dropped frames when changing the time range or custom dates: the dashboard snapshot is recomputed off the main thread (coalesced), so a filter change costs ~0 ms on the main thread instead of ~25–30 ms. Also debounce the date pickers and precompute custom-range bounds. |
 | **v1.1.0** | Bilingual UI (English default + 中文, live switch). Token-accuracy fixes (Claude cache double-count; Codex cached/reasoning de-dup) with a one-time corrective rescan. Fix WAL-mode SQLite read-only open that silently dropped OpenCode/Hermes usage. Faster rescans (substring-gated parsing, cached date formatters, batched transactional upserts, single-pass base aggregates, debounced search). |

@@ -26,7 +26,7 @@ public enum LocalUsageParser {
         let timestamp = parseDate(string(object["timestamp"])) ?? Date()
         let model = string(message["model"]) ?? "unknown"
         let requestId = string(message["id"]) ?? string(object["uuid"])
-        var record = UsageRecord(source: .claudeCode, accountId: "ClaudeCode Local", apiKeyHash: "local-claude-code", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: requestId, rawSource: filePath)
+        var record = UsageRecord(source: .claudeCode, accountId: "ClaudeCode Local", apiKeyHash: "local-claude-code", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheCreationTotal, requestId: requestId, rawSource: filePath)
         record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
         return record
     }
@@ -72,11 +72,12 @@ public enum LocalUsageParser {
         guard let message, let usage = message["usage"] as? [String: Any] else { return nil }
         let input = int(usage["input"])
         let output = int(usage["output"])
-        let cache = int(usage["cacheRead"]) + int(usage["cacheWrite"])
+        let cacheWrite = int(usage["cacheWrite"])
+        let cache = int(usage["cacheRead"]) + cacheWrite
         guard input + output + cache > 0 else { return nil }
         let timestamp = parseDate(string(object["timestamp"]) ?? string(object["ts"])) ?? Date(timeIntervalSince1970: Double(int(message["timestamp"])) / 1000.0)
         let model = string(message["model"]) ?? string(object["modelId"]) ?? "openclaw"
-        var record = UsageRecord(source: .openClaw, accountId: string(object["sessionKey"]) ?? "OpenClaw Local", apiKeyHash: string(message["provider"]) ?? string(object["provider"]) ?? "local-openclaw", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: string(object["id"]) ?? string(object["runId"]), rawSource: filePath)
+        var record = UsageRecord(source: .openClaw, accountId: string(object["sessionKey"]) ?? "OpenClaw Local", apiKeyHash: string(message["provider"]) ?? string(object["provider"]) ?? "local-openclaw", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: string(object["id"]) ?? string(object["runId"]), rawSource: filePath)
         if let cost = usage["cost"] as? [String: Any], let total = decimal(cost["total"]) { record.estimatedCost = total } else { record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing) }
         return record
     }
@@ -85,7 +86,7 @@ public enum LocalUsageParser {
         let outputWithReasoning = output + reasoning
         let cache = cacheRead + cacheWrite
         guard input + outputWithReasoning + cache > 0 else { return nil }
-        var record = UsageRecord(source: .hermes, accountId: userId ?? source ?? "Hermes Local", apiKeyHash: provider ?? "local-hermes", model: model ?? "unknown", timestamp: Date(timeIntervalSince1970: activityAt), inputTokens: input, outputTokens: outputWithReasoning, cacheTokens: cache, estimatedCost: cost.map { Decimal($0) } ?? 0, requestId: id, rawSource: "~/.hermes/state.db:sessions")
+        var record = UsageRecord(source: .hermes, accountId: userId ?? source ?? "Hermes Local", apiKeyHash: provider ?? "local-hermes", model: model ?? "unknown", timestamp: Date(timeIntervalSince1970: activityAt), inputTokens: input, outputTokens: outputWithReasoning, cacheTokens: cache, cacheCreationTokens: cacheWrite, estimatedCost: cost.map { Decimal($0) } ?? 0, requestId: id, rawSource: "~/.hermes/state.db:sessions")
         if record.estimatedCost == 0 { record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing) }
         return record
     }
@@ -102,6 +103,7 @@ public enum LocalUsageParser {
         let cacheWrite = intFromKeys(usage, ["cacheWriteTokens", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheWrite"])
             + intFromKeys(cacheDict ?? [:], ["write", "cacheWrite", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"])
         let cache = cacheRead + cacheWrite
+        let cacheCreation = cacheWrite
         guard input + output + cache > 0 else { return nil }
         let provider = stringFromKeys(object, ["provider", "providerID", "providerId"])
             ?? stringFromKeys(usage, ["provider", "providerID", "providerId"])
@@ -111,7 +113,7 @@ public enum LocalUsageParser {
         let timestamp = parseDate(stringFromKeys(object, ["timeCreated", "time_created", "timestamp", "createdAt"]))
             ?? Date(timeIntervalSince1970: normalizedEpoch(timeCreated))
         let requestId = stringFromKeys(object, ["id", "requestId", "request_id"]) ?? id
-        var record = UsageRecord(source: .openCode, accountId: sessionId, apiKeyHash: provider ?? "local-opencode", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: requestId, rawSource: rawSource)
+        var record = UsageRecord(source: .openCode, accountId: sessionId, apiKeyHash: provider ?? "local-opencode", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheCreation, requestId: requestId, rawSource: rawSource)
         if let cost = decimalFromKeys(usage, ["cost", "costUSD", "cost_usd", "estimatedCost", "estimated_cost"]) {
             record.estimatedCost = cost
         } else {

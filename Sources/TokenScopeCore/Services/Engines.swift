@@ -68,8 +68,10 @@ public enum AggregationEngine {
             partial.inputTokens += record.inputTokens
             partial.outputTokens += record.outputTokens
             partial.cacheTokens += record.cacheTokens
+            partial.cacheCreationTokens += record.cacheCreationTokens
             partial.totalTokens += record.totalTokens
             partial.estimatedCost += record.estimatedCost
+            partial.requestCount += 1
         }
     }
 

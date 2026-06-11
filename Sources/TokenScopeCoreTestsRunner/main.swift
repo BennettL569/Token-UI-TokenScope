@@ -12,6 +12,7 @@ struct TokenScopeCoreTestsRunner {
         try aggregationFiltersToday()
         try aggregationFiltersCustomDateRange()
         try aggregationCustomRangeIncludesEndDayButNotNextDay()
+        try aggregationTracksRequestCountAndCacheCreation()
         try budgetAlertLevels()
         try exportRedactsIdentifiersByDefault()
         try await repositoryDeduplicatesRecords()
@@ -26,10 +27,11 @@ struct TokenScopeCoreTestsRunner {
         try openCodeParserReadsNestedTokensCacheShape()
         try await persistentRepositoryKeepsHistoricalRecords()
         try pricingPersistsInSQLite()
+        try pricingCanBeDeleted()
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 24 checks passed")
+        print("TokenScopeCoreTestsRunner: 26 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -106,6 +108,18 @@ struct TokenScopeCoreTestsRunner {
         try expect(usage.totalTokens == 30, "custom range boundary mismatch (expected same-day 10+20, next day excluded)")
     }
 
+    static func aggregationTracksRequestCountAndCacheCreation() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: now, inputTokens: 10, outputTokens: 5, cacheTokens: 100, cacheCreationTokens: 30, estimatedCost: 0, rawSource: "1"),
+            UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: now, inputTokens: 20, outputTokens: 8, cacheTokens: 50, cacheCreationTokens: 20, estimatedCost: 0, rawSource: "2")
+        ]
+        let usage = AggregationEngine.aggregate(records: records, range: .today, now: now)
+        try expect(usage.requestCount == 2, "request count should equal number of records")
+        try expect(usage.cacheCreationTokens == 50, "cache creation sum mismatch")
+        try expect(usage.cacheReadTokens == 100, "cache read (derived) sum mismatch")
+    }
+
     static func budgetAlertLevels() throws {
         try expect(BudgetEngine.alertLevel(progress: 0.5) == .normal, "normal budget mismatch")
         try expect(BudgetEngine.alertLevel(progress: 0.8) == .warning, "warning budget mismatch")
@@ -148,6 +162,8 @@ struct TokenScopeCoreTestsRunner {
         let record = LocalUsageParser.parseClaudeLine(line, filePath: "/tmp/claude.jsonl", pricing: [])
         try expect(record?.cacheTokens == 18388, "claude cache double-counted cache_creation breakdown")
         try expect(record?.totalTokens == 2 + 10 + 18388, "claude total mismatch after cache fix")
+        try expect(record?.cacheCreationTokens == 2170, "claude cache creation portion mismatch")
+        try expect(record?.cacheReadTokens == 16218, "claude cache read portion mismatch")
     }
 
     static func codexParserReadsTokenCountLine() throws {
@@ -163,6 +179,8 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.outputTokens == 3, "codex output mismatch (reasoning must not be added on top)")
         try expect(record?.cacheTokens == 7, "codex cache mismatch")
         try expect(record?.totalTokens == 20, "codex total must equal input_tokens + output_tokens")
+        try expect(record?.cacheCreationTokens == 0, "codex cached tokens are reads, not creation")
+        try expect(record?.cacheReadTokens == 7, "codex cache read mismatch")
     }
 
     static func openClawParserReadsUsageLine() throws {
@@ -279,6 +297,8 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.inputTokens == 31, "opencode input mismatch")
         try expect(record?.outputTokens == 41, "opencode output mismatch")
         try expect(record?.cacheTokens == 12, "opencode cache mismatch")
+        try expect(record?.cacheCreationTokens == 7, "opencode cache creation (write) mismatch")
+        try expect(record?.cacheReadTokens == 5, "opencode cache read mismatch")
         try expect(abs(NSDecimalNumber(decimal: record?.estimatedCost ?? 0).doubleValue - 0.234) < 0.0001, "opencode cost mismatch")
     }
 
@@ -321,6 +341,32 @@ struct TokenScopeCoreTestsRunner {
         try expect(pricing[0].tool == .codeX, "pricing tool mismatch")
         try expect(pricing[0].model == "custom-codex-model", "pricing model mismatch")
         try expect(abs(NSDecimalNumber(decimal: pricing[0].outputPerMillion).doubleValue - 6.5) < 0.0001, "pricing value mismatch")
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(atPath: url.path + "-wal")
+        try? FileManager.default.removeItem(atPath: url.path + "-shm")
+    }
+
+    static func pricingCanBeDeleted() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-pricing-delete-test-\(UUID().uuidString).sqlite")
+        let keep = ModelPricing(tool: .hermes, model: "keep-model", inputPerMillion: 1, outputPerMillion: 2, cachePerMillion: 0.1)
+        let drop = ModelPricing(tool: .codeX, model: "drop-model", inputPerMillion: 3, outputPerMillion: 4, cachePerMillion: 0.2)
+        let repository = PersistentUsageRepository(dbURL: url)
+        repository.savePricing([keep, drop])
+
+        // Repository-level delete removes only the targeted (tool, model) row and persists.
+        repository.deletePricing(drop)
+        let reloaded = PersistentUsageRepository(dbURL: url).loadPricing()
+        try expect(reloaded.count == 1, "delete should leave exactly one row")
+        try expect(reloaded[0].id == keep.id, "delete removed the wrong row")
+
+        // Store-level delete removes the item from the in-memory published list.
+        let store = UsageStore(repository: PersistentUsageRepository(dbURL: url))
+        store.setPricing(drop)
+        try expect(store.pricing.contains { $0.id == drop.id }, "setup: drop should be present before deletion")
+        store.deletePricing(drop)
+        try expect(!store.pricing.contains { $0.id == drop.id }, "store.deletePricing did not remove the item")
+        try expect(store.pricing.contains { $0.id == keep.id }, "store.deletePricing removed an unrelated item")
+
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(atPath: url.path + "-wal")
         try? FileManager.default.removeItem(atPath: url.path + "-shm")

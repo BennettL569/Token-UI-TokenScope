@@ -74,7 +74,8 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// wrong. On launch, a stored value behind this triggers a one-time full reparse so the fix
     /// reaches historical data (incremental sync alone only re-reads newly appended log bytes).
     /// v2: Claude cache-creation double-count fixed; Codex cached/reasoning tokens de-duplicated.
-    static let parserVersion = 2
+    /// v3: record the cache-creation (write) portion of cache tokens separately.
+    static let parserVersion = 3
     static let parserVersionDefaultsKey = "TokenScopeParserVersion"
 
     /// Localizes an inline English/Chinese pair for the current `language`.
@@ -355,8 +356,10 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         aggregate.inputTokens += record.inputTokens
         aggregate.outputTokens += record.outputTokens
         aggregate.cacheTokens += record.cacheTokens
+        aggregate.cacheCreationTokens += record.cacheCreationTokens
         aggregate.totalTokens += record.totalTokens
         aggregate.estimatedCost += record.estimatedCost
+        aggregate.requestCount += 1
     }
 
     public func activeRangeContains(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {
@@ -390,6 +393,12 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         }
         let repo = repository
         writeQueue.async { repo.upsertPricing(item) }
+    }
+
+    public func deletePricing(_ item: ModelPricing) {
+        pricing.removeAll { $0.id == item.id }
+        let repo = repository
+        writeQueue.async { repo.deletePricing(item) }
     }
 
     public func saveAllPricing() {

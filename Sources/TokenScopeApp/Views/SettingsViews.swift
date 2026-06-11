@@ -100,6 +100,7 @@ struct PricingView: View {
     @State private var newCachePrice: Decimal = 0
     @State private var validationMessage = ""
     @State private var validationIsSuccess = false
+    @State private var pendingDelete: ModelPricing?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -162,9 +163,35 @@ struct PricingView: View {
                     TableColumn(lang.select("Input", "输入")) { row in DecimalField(value: row.inputPerMillion) }
                     TableColumn(lang.select("Output", "输出")) { row in DecimalField(value: row.outputPerMillion) }
                     TableColumn(lang.select("Cache", "缓存")) { row in DecimalField(value: row.cachePerMillion) }
+                    TableColumn(lang.select("Delete", "删除")) { row in
+                        Button(role: .destructive) {
+                            pendingDelete = row.wrappedValue
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(Color.red)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(lang.select("Delete this price", "删除该定价"))
+                    }
+                    .width(54)
                 }
                 .onChange(of: store.pricing) { _, _ in
                     store.saveAllPricing()
+                }
+                .confirmationDialog(
+                    lang.select("Delete this price?", "删除该定价？"),
+                    isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                    presenting: pendingDelete
+                ) { item in
+                    Button(lang.select("Delete \(item.tool.rawValue) / \(item.model)", "删除 \(item.tool.rawValue) / \(item.model)"), role: .destructive) {
+                        store.deletePricing(item)
+                        validationIsSuccess = true
+                        validationMessage = lang.select("Deleted price for \(item.tool.rawValue) / \(item.model)", "已删除 \(item.tool.rawValue) / \(item.model) 的定价")
+                        pendingDelete = nil
+                    }
+                    Button(lang.select("Cancel", "取消"), role: .cancel) { pendingDelete = nil }
+                } message: { item in
+                    Text(lang.select("This only removes the price entry; historical usage records are unaffected. You can re-add it anytime.", "仅删除该价格条目，不影响历史用量记录，可随时重新添加。"))
                 }
                 .frame(minHeight: 430)
             }

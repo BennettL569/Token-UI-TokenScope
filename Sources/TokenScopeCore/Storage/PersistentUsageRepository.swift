@@ -48,7 +48,7 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         defer { lock.unlock() }
         let sql = """
         SELECT id, source, account_id, api_key_hash, model, timestamp, input_tokens, output_tokens,
-               cache_tokens, estimated_cost, request_id, dedupe_key, raw_source
+               cache_tokens, estimated_cost, request_id, dedupe_key, raw_source, cache_creation_tokens
         FROM usage_records
         ORDER BY timestamp DESC
         """
@@ -72,6 +72,7 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
                 inputTokens: Int(sqlite3_column_int64(statement, 6)),
                 outputTokens: Int(sqlite3_column_int64(statement, 7)),
                 cacheTokens: Int(sqlite3_column_int64(statement, 8)),
+                cacheCreationTokens: Int(sqlite3_column_int64(statement, 13)),
                 estimatedCost: cost,
                 requestId: columnText(statement, 10),
                 dedupeKey: columnText(statement, 11),
@@ -163,6 +164,18 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         upsertPricingLocked(item)
     }
 
+    public func deletePricing(_ item: ModelPricing) {
+        lock.lock()
+        defer { lock.unlock() }
+        let sql = "DELETE FROM model_pricing WHERE tool = ? AND model = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+        bind(statement, 1, item.tool.rawValue)
+        bind(statement, 2, item.model)
+        sqlite3_step(statement)
+    }
+
     public func loadBudgets() -> [BudgetRule] {
         lock.lock()
         defer { lock.unlock() }
@@ -214,12 +227,16 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
             input_tokens INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL,
             cache_tokens INTEGER NOT NULL,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL,
             estimated_cost REAL NOT NULL,
             request_id TEXT,
             raw_source TEXT NOT NULL
         )
         """, nil, nil, nil)
+        // Migration for databases created before cache_creation_tokens existed. The ALTER fails
+        // harmlessly (and is ignored) once the column is present.
+        sqlite3_exec(db, "ALTER TABLE usage_records ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0", nil, nil, nil)
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_usage_source_time ON usage_records(source, timestamp)", nil, nil, nil)
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_usage_account ON usage_records(account_id)", nil, nil, nil)
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model)", nil, nil, nil)
@@ -257,8 +274,8 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         INSERT INTO usage_records (
             dedupe_key, id, source, account_id, api_key_hash, model, timestamp,
             input_tokens, output_tokens, cache_tokens, total_tokens, estimated_cost,
-            request_id, raw_source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            request_id, raw_source, cache_creation_tokens
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dedupe_key) DO UPDATE SET
             id=excluded.id,
             source=excluded.source,
@@ -272,7 +289,8 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
             total_tokens=excluded.total_tokens,
             estimated_cost=excluded.estimated_cost,
             request_id=excluded.request_id,
-            raw_source=excluded.raw_source
+            raw_source=excluded.raw_source,
+            cache_creation_tokens=excluded.cache_creation_tokens
         """
 
     /// Binds a record onto an already-prepared `upsertSQL` statement. The caller owns stepping,
@@ -292,6 +310,7 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         sqlite3_bind_double(statement, 12, NSDecimalNumber(decimal: record.estimatedCost).doubleValue)
         if let requestId = record.requestId { bind(statement, 13, requestId) } else { sqlite3_bind_null(statement, 13) }
         bind(statement, 14, record.rawSource)
+        sqlite3_bind_int64(statement, 15, Int64(record.cacheCreationTokens))
     }
 
     private func upsertPricingLocked(_ item: ModelPricing) {

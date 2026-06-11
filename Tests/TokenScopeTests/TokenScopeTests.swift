@@ -101,6 +101,29 @@ struct TokenScopeTests {
         #expect(store.dashboardSnapshot.recentRecords.count == 2)
     }
 
+    @Test func pricingCanBeDeleted() {
+        let dbURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-pricing-delete-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let keep = ModelPricing(tool: .hermes, model: "keep-model", inputPerMillion: 1, outputPerMillion: 2, cachePerMillion: 0.1)
+        let drop = ModelPricing(tool: .codeX, model: "drop-model", inputPerMillion: 3, outputPerMillion: 4, cachePerMillion: 0.2)
+        let repository = PersistentUsageRepository(dbURL: dbURL)
+        repository.savePricing([keep, drop])
+
+        // Repository-level delete removes only the targeted (tool, model) row and persists.
+        repository.deletePricing(drop)
+        let reloaded = PersistentUsageRepository(dbURL: dbURL).loadPricing()
+        #expect(reloaded.count == 1)
+        #expect(reloaded.first?.id == keep.id)
+
+        // Store-level delete removes the item from the in-memory published list.
+        let store = UsageStore(repository: PersistentUsageRepository(dbURL: dbURL))
+        store.setPricing(drop)
+        #expect(store.pricing.contains { $0.id == drop.id })
+        store.deletePricing(drop)
+        #expect(!store.pricing.contains { $0.id == drop.id })
+        #expect(store.pricing.contains { $0.id == keep.id })
+    }
+
     @Test func dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates() {
         let dbURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-snapshot-filter-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: dbURL) }
@@ -160,6 +183,8 @@ struct TokenScopeTests {
         let record = LocalUsageParser.parseClaudeLine(line, filePath: "/tmp/claude.jsonl", pricing: [])
         #expect(record?.cacheTokens == 18388)
         #expect(record?.totalTokens == 2 + 10 + 18388)
+        #expect(record?.cacheCreationTokens == 2170)
+        #expect(record?.cacheReadTokens == 16218)
     }
 
     @Test func codexParserUsesDisjointTokenBuckets() {
@@ -172,6 +197,20 @@ struct TokenScopeTests {
         #expect(record?.outputTokens == 3)
         #expect(record?.cacheTokens == 7)
         #expect(record?.totalTokens == 20)
+        #expect(record?.cacheCreationTokens == 0)
+        #expect(record?.cacheReadTokens == 7)
+    }
+
+    @Test func aggregationTracksRequestCountAndCacheCreation() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: now, inputTokens: 10, outputTokens: 5, cacheTokens: 100, cacheCreationTokens: 30, estimatedCost: 0, rawSource: "1"),
+            UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: now, inputTokens: 20, outputTokens: 8, cacheTokens: 50, cacheCreationTokens: 20, estimatedCost: 0, rawSource: "2")
+        ]
+        let usage = AggregationEngine.aggregate(records: records, range: .today, now: now)
+        #expect(usage.requestCount == 2)
+        #expect(usage.cacheCreationTokens == 50)
+        #expect(usage.cacheReadTokens == 100)
     }
 
     @Test func readOnlySQLiteReadsWalDatabaseAfterWriterClosed() {

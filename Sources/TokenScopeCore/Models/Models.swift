@@ -83,11 +83,17 @@ public struct UsageRecord: Identifiable, Codable, Hashable, Sendable {
     public var inputTokens: Int
     public var outputTokens: Int
     public var cacheTokens: Int
+    /// The portion of `cacheTokens` that is cache *creation* (a.k.a. cache write). The remainder
+    /// is cache read (`cacheReadTokens`). Tracked separately so the UI can report cache creation.
+    public var cacheCreationTokens: Int
     public var totalTokens: Int
     public var estimatedCost: Decimal
     public var requestId: String?
     public var dedupeKey: String
     public var rawSource: String
+
+    /// Cache read tokens = total cache minus the cache-creation portion.
+    public var cacheReadTokens: Int { max(0, cacheTokens - cacheCreationTokens) }
 
     public init(
         id: UUID = UUID(),
@@ -99,6 +105,7 @@ public struct UsageRecord: Identifiable, Codable, Hashable, Sendable {
         inputTokens: Int,
         outputTokens: Int,
         cacheTokens: Int,
+        cacheCreationTokens: Int = 0,
         estimatedCost: Decimal = 0,
         requestId: String? = nil,
         dedupeKey: String? = nil,
@@ -113,6 +120,7 @@ public struct UsageRecord: Identifiable, Codable, Hashable, Sendable {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cacheTokens = cacheTokens
+        self.cacheCreationTokens = min(max(0, cacheCreationTokens), cacheTokens)
         self.totalTokens = inputTokens + outputTokens + cacheTokens
         self.estimatedCost = estimatedCost
         self.requestId = requestId
@@ -209,12 +217,19 @@ public struct AggregatedUsage: Codable, Equatable, Sendable {
     public var inputTokens: Int
     public var outputTokens: Int
     public var cacheTokens: Int
+    /// Cache-creation (write) portion of `cacheTokens`.
+    public var cacheCreationTokens: Int
     public var totalTokens: Int
     public var estimatedCost: Decimal
+    /// Number of usage records (≈ API requests) covered by this aggregate.
+    public var requestCount: Int
 
     public var billableTokens: Int {
         inputTokens + outputTokens
     }
+
+    /// Cache read portion = total cache minus the cache-creation portion.
+    public var cacheReadTokens: Int { max(0, cacheTokens - cacheCreationTokens) }
 
     public var cacheHitRate: Double {
         let denominator = inputTokens + cacheTokens
@@ -222,12 +237,14 @@ public struct AggregatedUsage: Codable, Equatable, Sendable {
         return Double(cacheTokens) / Double(denominator)
     }
 
-    public init(inputTokens: Int = 0, outputTokens: Int = 0, cacheTokens: Int = 0, totalTokens: Int = 0, estimatedCost: Decimal = 0) {
+    public init(inputTokens: Int = 0, outputTokens: Int = 0, cacheTokens: Int = 0, cacheCreationTokens: Int = 0, totalTokens: Int = 0, estimatedCost: Decimal = 0, requestCount: Int = 0) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cacheTokens = cacheTokens
+        self.cacheCreationTokens = cacheCreationTokens
         self.totalTokens = totalTokens
         self.estimatedCost = estimatedCost
+        self.requestCount = requestCount
     }
 }
 

@@ -11,9 +11,10 @@ struct TokenScopeApp: App {
             ScopeThemeReader {
                 RootView()
                     .environmentObject(store)
+                    .environment(\.appLanguage, store.language)
                     .frame(minWidth: 1120, minHeight: 720)
                     .task {
-                        if store.records.isEmpty { await store.refreshAll() }
+                        await store.refreshOnLaunch()
                     }
             }
         }
@@ -23,6 +24,7 @@ struct TokenScopeApp: App {
             ScopeThemeReader {
                 MenuBarMiniPanel()
                     .environmentObject(store)
+                    .environment(\.appLanguage, store.language)
             }
         } label: {
             let today = store.dashboardSnapshot.today

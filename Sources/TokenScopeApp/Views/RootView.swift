@@ -4,6 +4,7 @@ import TokenScopeCore
 struct RootView: View {
     @EnvironmentObject private var store: UsageStore
     @Environment(\.scopeTheme) private var theme
+    @Environment(\.appLanguage) private var lang
     @State private var selection: Section = .dashboard
 
     enum Section: String, CaseIterable, Identifiable {
@@ -17,6 +18,20 @@ struct RootView: View {
         case settings = "Settings"
         case widgets = "Widgets"
         var id: String { rawValue }
+
+        func displayName(_ language: AppLanguage) -> String {
+            switch self {
+            case .dashboard: return language.select("Dashboard", "仪表盘")
+            case .details: return language.select("Usage", "用量明细")
+            case .sources: return language.select("Data Sources", "数据源")
+            case .accounts: return language.select("Accounts", "账号")
+            case .pricing: return language.select("Pricing", "定价")
+            case .budgets: return language.select("Budgets", "预算")
+            case .export: return language.select("Export", "导出")
+            case .settings: return language.select("Settings", "设置")
+            case .widgets: return language.select("Widgets", "小组件")
+            }
+        }
     }
 
     var body: some View {
@@ -24,7 +39,7 @@ struct RootView: View {
             ZStack {
                 theme.sidebarBackground.ignoresSafeArea()
                 List(Section.allCases, selection: $selection) { item in
-                    Label(item.rawValue, systemImage: icon(for: item))
+                    Label(item.displayName(lang), systemImage: icon(for: item))
                         .tag(item)
                 }
                 .scrollContentBackground(.hidden)

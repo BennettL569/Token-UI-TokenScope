@@ -15,10 +15,12 @@ struct TokenScopeCoreTestsRunner {
         try exportRedactsIdentifiersByDefault()
         try await repositoryDeduplicatesRecords()
         try claudeParserReadsUsageLine()
+        try claudeParserDoesNotDoubleCountCacheCreation()
         try codexParserReadsTokenCountLine()
         try openClawParserReadsUsageLine()
         try hermesParserIncludesReasoningTokens()
         try await hermesSQLiteAdapterUsesLatestMessageTimestamp()
+        try await sqliteAdapterReadsWalModeDatabaseAfterWriterClosed()
         try openCodeParserReadsMessageRow()
         try openCodeParserReadsNestedTokensCacheShape()
         try await persistentRepositoryKeepsHistoricalRecords()
@@ -26,7 +28,7 @@ struct TokenScopeCoreTestsRunner {
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 21 checks passed")
+        print("TokenScopeCoreTestsRunner: 23 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -119,15 +121,30 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.cacheTokens == 7, "claude cache mismatch")
     }
 
+    static func claudeParserDoesNotDoubleCountCacheCreation() throws {
+        // `cache_creation_input_tokens` (2170) equals the sum of the `cache_creation.ephemeral_*`
+        // breakdown, so cache must be 2170 + cache_read (16218) = 18388 — not 2170 + 16218 + 2170.
+        let line = """
+        {"type":"assistant","uuid":"u2","timestamp":"2026-05-11T19:59:41.206Z","message":{"id":"m2","model":"claude-sonnet-4.5","usage":{"input_tokens":2,"output_tokens":10,"cache_creation_input_tokens":2170,"cache_read_input_tokens":16218,"cache_creation":{"ephemeral_5m_input_tokens":2170,"ephemeral_1h_input_tokens":0}}}}
+        """
+        let record = LocalUsageParser.parseClaudeLine(line, filePath: "/tmp/claude.jsonl", pricing: [])
+        try expect(record?.cacheTokens == 18388, "claude cache double-counted cache_creation breakdown")
+        try expect(record?.totalTokens == 2 + 10 + 18388, "claude total mismatch after cache fix")
+    }
+
     static func codexParserReadsTokenCountLine() throws {
+        // Codex: total_tokens == input_tokens + output_tokens, with cached_input_tokens a subset
+        // of input and reasoning_output_tokens a subset of output. The disjoint buckets are
+        // input = 17 - 7 = 10, output = 3 (already includes reasoning), cache = 7, total = 20.
         let line = """
         {"timestamp":"2026-04-18T15:41:12.238Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"reasoning_output_tokens":2,"total_tokens":20}}}}
         """
         let record = LocalUsageParser.parseCodexLine(line, filePath: "/tmp/codex.jsonl", pricing: [])
         try expect(record?.source == .codeX, "codex source mismatch")
-        try expect(record?.inputTokens == 17, "codex input mismatch")
-        try expect(record?.outputTokens == 5, "codex output mismatch")
+        try expect(record?.inputTokens == 10, "codex input mismatch (cached must be split out of input)")
+        try expect(record?.outputTokens == 3, "codex output mismatch (reasoning must not be added on top)")
         try expect(record?.cacheTokens == 7, "codex cache mismatch")
+        try expect(record?.totalTokens == 20, "codex total must equal input_tokens + output_tokens")
     }
 
     static func openClawParserReadsUsageLine() throws {
@@ -194,6 +211,42 @@ struct TokenScopeCoreTestsRunner {
         try expect(records[0].timestamp.timeIntervalSince1970 == 1779493000, "hermes sqlite adapter did not use latest message timestamp")
         try expect(records[0].outputTokens == 25, "hermes sqlite adapter did not include reasoning tokens")
         try expect(records[0].totalTokens == 132, "hermes sqlite adapter total mismatch")
+    }
+
+    static func sqliteAdapterReadsWalModeDatabaseAfterWriterClosed() async throws {
+        // Reproduces the OpenCode/Hermes under-counting bug: a WAL-mode database whose -wal/-shm
+        // sidecars were removed on clean close could not be opened with a plain read-only handle,
+        // so the adapter silently returned zero rows. Exercised end-to-end through the adapter.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-hermes-wal-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        do {
+            let db = try SQLiteTestDB(path: url.path)
+            try db.exec("PRAGMA journal_mode=WAL;")
+            try db.exec("""
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, source TEXT NOT NULL, user_id TEXT, model TEXT,
+                started_at REAL NOT NULL, ended_at REAL,
+                input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+                cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+                reasoning_tokens INTEGER DEFAULT 0, estimated_cost_usd REAL, billing_provider TEXT
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                role TEXT NOT NULL, timestamp REAL NOT NULL, token_count INTEGER
+            );
+            INSERT INTO sessions (id, source, user_id, model, started_at, ended_at, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd, billing_provider)
+            VALUES ('s1', 'webui', 'u1', 'gpt-5.5', 1779374334, NULL, 100, 20, 3, 4, 0, NULL, 'provider');
+            """)
+        } // writer closed here → -wal/-shm removed
+        let adapter = HermesSQLiteUsageAdapter()
+        let source = UsageSource(tool: .hermes, name: "Hermes WAL", accountId: "u1", apiKeyIdentity: "provider", localLogPath: url.path)
+        let records = try await adapter.refresh(source: source, pricing: [], cursorStore: nil, fullScan: true)
+        try expect(records.count == 1, "hermes adapter dropped a WAL-mode database opened read-only")
+        try expect(records[0].totalTokens == 127, "hermes WAL record token mismatch")
     }
 
     static func openCodeParserReadsMessageRow() throws {

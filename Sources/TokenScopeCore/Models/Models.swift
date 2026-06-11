@@ -66,7 +66,7 @@ public struct SyncStatus: Codable, Equatable, Hashable, Sendable {
     public var lastSync: Date?
     public var message: String
 
-    public init(kind: SyncStatusKind = .idle, lastSync: Date? = nil, message: String = "尚未同步") {
+    public init(kind: SyncStatusKind = .idle, lastSync: Date? = nil, message: String = "Not synced yet") {
         self.kind = kind
         self.lastSync = lastSync
         self.message = message

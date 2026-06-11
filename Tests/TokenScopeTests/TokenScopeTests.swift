@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SQLite3
 @testable import TokenScopeCore
 
 @Suite("TokenScope Core")
@@ -127,6 +128,56 @@ struct TokenScopeTests {
         #expect(store.dashboardSnapshot.selected.totalTokens == 391)
         #expect(store.dashboardSnapshot.recentRecords.count == 3)
         #expect(store.dashboardSnapshot.all.totalTokens == 391)
+    }
+
+    @Test func claudeParserDoesNotDoubleCountCacheCreation() {
+        // cache_creation_input_tokens (2170) == sum of the cache_creation.ephemeral_* breakdown,
+        // so cache must be 2170 + cache_read (16218) = 18388, not 2170 + 16218 + 2170.
+        let line = """
+        {"type":"assistant","uuid":"u2","timestamp":"2026-05-11T19:59:41.206Z","message":{"id":"m2","model":"claude-sonnet-4.5","usage":{"input_tokens":2,"output_tokens":10,"cache_creation_input_tokens":2170,"cache_read_input_tokens":16218,"cache_creation":{"ephemeral_5m_input_tokens":2170,"ephemeral_1h_input_tokens":0}}}}
+        """
+        let record = LocalUsageParser.parseClaudeLine(line, filePath: "/tmp/claude.jsonl", pricing: [])
+        #expect(record?.cacheTokens == 18388)
+        #expect(record?.totalTokens == 2 + 10 + 18388)
+    }
+
+    @Test func codexParserUsesDisjointTokenBuckets() {
+        // Codex follows OpenAI accounting: total == input + output, cached ⊆ input, reasoning ⊆ output.
+        let line = """
+        {"timestamp":"2026-04-18T15:41:12.238Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"reasoning_output_tokens":2,"total_tokens":20}}}}
+        """
+        let record = LocalUsageParser.parseCodexLine(line, filePath: "/tmp/codex.jsonl", pricing: [])
+        #expect(record?.inputTokens == 10)
+        #expect(record?.outputTokens == 3)
+        #expect(record?.cacheTokens == 7)
+        #expect(record?.totalTokens == 20)
+    }
+
+    @Test func readOnlySQLiteReadsWalDatabaseAfterWriterClosed() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-walro-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        // Create a WAL-mode database, write rows, then close it (a clean close removes the
+        // -wal/-shm sidecars). A plain SQLITE_OPEN_READONLY open of what remains can fail with
+        // SQLITE_CANTOPEN; the robust helper must still return a usable handle.
+        var writer: OpaquePointer?
+        #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
+        sqlite3_exec(writer, "PRAGMA journal_mode=WAL", nil, nil, nil)
+        sqlite3_exec(writer, "CREATE TABLE t (id INTEGER)", nil, nil, nil)
+        sqlite3_exec(writer, "INSERT INTO t (id) VALUES (1),(2),(3)", nil, nil, nil)
+        sqlite3_close(writer)
+
+        let db = ReadOnlySQLite.open(url.path)
+        #expect(db != nil)
+        var stmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM t", -1, &stmt, nil) == SQLITE_OK)
+        #expect(sqlite3_step(stmt) == SQLITE_ROW)
+        #expect(sqlite3_column_int64(stmt, 0) == 3)
+        sqlite3_finalize(stmt)
+        if let db { sqlite3_close(db) }
     }
 
     @Test func budgetAlertLevels() {

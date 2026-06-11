@@ -3,28 +3,29 @@ import TokenScopeCore
 
 struct ExportView: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
     @State private var format: ExportFormat = .csv
     @State private var includeIdentifiers = false
     @State private var preview = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HeaderBar(title: "Export / Import", subtitle: "导出 CSV/JSON；导出前明确选择是否包含账号/API 标识")
+            HeaderBar(title: lang.select("Export / Import", "导出 / 导入"), subtitle: lang.select("Export CSV/JSON; explicitly choose whether to include account / API identifiers before exporting", "导出 CSV/JSON；导出前明确选择是否包含账号/API 标识"))
             GlassPanel {
                 VStack(alignment: .leading, spacing: 14) {
-                    Picker("格式", selection: $format) {
+                    Picker(lang.select("Format", "格式"), selection: $format) {
                         ForEach(ExportFormat.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 260)
-                    Toggle("导出中包含账号/API Key 标识（默认关闭）", isOn: $includeIdentifiers)
+                    Toggle(lang.select("Include account / API Key identifiers in export (off by default)", "导出中包含账号/API Key 标识（默认关闭）"), isOn: $includeIdentifiers)
                     HStack {
-                        Button("生成导出预览") {
-                            preview = (try? ExportService.export(records: store.filteredRecords(), format: format, includeIdentifiers: includeIdentifiers)) ?? "导出失败"
+                        Button(lang.select("Generate export preview", "生成导出预览")) {
+                            preview = (try? ExportService.export(records: store.filteredRecords(), format: format, includeIdentifiers: includeIdentifiers)) ?? lang.select("Export failed", "导出失败")
                         }
-                        Button("导入 JSON/CSV 历史数据") {}
+                        Button(lang.select("Import JSON/CSV history", "导入 JSON/CSV 历史数据")) {}
                             .disabled(true)
-                        Text("CSV 导入 UI 已预留；JSON 标准导入服务已实现。")
+                        Text(lang.select("CSV import UI is reserved; the standard JSON import service is implemented.", "CSV 导入 UI 已预留；JSON 标准导入服务已实现。"))
                             .font(.caption)
                             .foregroundStyle(Color.scopeTextMuted)
                     }
@@ -41,64 +42,81 @@ struct ExportView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
     @State private var confirmClear = false
     @State private var confirmFullRebuild = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HeaderBar(title: "Settings", subtitle: "隐私、安全、菜单栏和本地数据控制")
+            HeaderBar(title: lang.select("Settings", "设置"), subtitle: lang.select("Language, privacy, security, menu bar and local data controls", "语言、隐私、安全、菜单栏和本地数据控制"))
             GlassPanel {
                 VStack(alignment: .leading, spacing: 16) {
-                    Toggle("菜单栏显示今日费用（关闭则显示今日 tokens）", isOn: $store.menuBarShowsCost)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(lang.select("Language", "语言"))
+                            .font(.headline)
+                        Picker(lang.select("Language", "语言"), selection: $store.language) {
+                            ForEach(AppLanguage.allCases) { language in
+                                Text(language.nativeName).tag(language)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 220)
+                        Text(lang.select("Switch the interface language. English is the default; your choice is saved.", "切换界面语言。默认英文；选择会被保存。"))
+                            .font(.caption)
+                            .foregroundStyle(Color.scopeTextMuted)
+                    }
+                    Divider()
+                    Toggle(lang.select("Show today's cost in the menu bar (off shows today's tokens)", "菜单栏显示今日费用（关闭则显示今日 tokens）"), isOn: $store.menuBarShowsCost)
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("同步策略")
+                        Text(lang.select("Sync Strategy", "同步策略"))
                             .font(.headline)
-                        Text("默认刷新只读取上次刷新后的新增 Token 数据，避免每次从头扫描全部日志。若历史数据异常或更换数据源，可手动触发全量重建。")
+                        Text(lang.select("A normal refresh only reads token data added since the last refresh, instead of rescanning every log from scratch. If history looks wrong or you switch data sources, you can trigger a full rebuild manually.", "默认刷新只读取上次刷新后的新增 Token 数据，避免每次从头扫描全部日志。若历史数据异常或更换数据源，可手动触发全量重建。"))
                             .font(.caption)
                             .foregroundStyle(Color.scopeTextMuted)
                         Button {
                             confirmFullRebuild = true
                         } label: {
-                            Label("从头重读全部 Token 数据", systemImage: "arrow.triangle.2.circlepath")
+                            Label(lang.select("Re-read all token data from scratch", "从头重读全部 Token 数据"), systemImage: "arrow.triangle.2.circlepath")
                         }
                         .disabled(store.isRefreshing)
                     }
                     Divider()
-                    Label("默认不上传任何统计数据；所有聚合、导入、导出都在本机完成。", systemImage: "lock.shield")
-                    Label("API Key 使用 macOS Keychain 保存，界面仅显示脱敏标识。", systemImage: "key")
+                    Label(lang.select("No statistics are uploaded by default; all aggregation, import and export happen on this machine.", "默认不上传任何统计数据；所有聚合、导入、导出都在本机完成。"), systemImage: "lock.shield")
+                    Label(lang.select("API keys are stored in the macOS Keychain; the UI shows only a masked identity.", "API Key 使用 macOS Keychain 保存，界面仅显示脱敏标识。"), systemImage: "key")
                     Button(role: .destructive) { confirmClear = true } label: {
-                        Label("一键清除本地统计数据", systemImage: "trash")
+                        Label(lang.select("Clear local statistics", "一键清除本地统计数据"), systemImage: "trash")
                     }
                 }
             }
         }
-        .confirmationDialog("确认清除所有本地 usage 统计？此操作不可撤销。", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("清除", role: .destructive) { Task { await store.clearLocalData() } }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(lang.select("Clear all local usage statistics? This cannot be undone.", "确认清除所有本地 usage 统计？此操作不可撤销。"), isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(lang.select("Clear", "清除"), role: .destructive) { Task { await store.clearLocalData() } }
+            Button(lang.select("Cancel", "取消"), role: .cancel) {}
         }
-        .confirmationDialog("确认从头重读全部 Token 数据？这会清空当前统计并重新扫描全部已配置数据源，耗时会比普通增量刷新更长。", isPresented: $confirmFullRebuild, titleVisibility: .visible) {
-            Button("全量重读", role: .destructive) { Task { await store.rebuildAllData() } }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(lang.select("Re-read all token data from scratch? This clears the current stats and rescans every configured data source, which takes longer than a normal incremental refresh.", "确认从头重读全部 Token 数据？这会清空当前统计并重新扫描全部已配置数据源，耗时会比普通增量刷新更长。"), isPresented: $confirmFullRebuild, titleVisibility: .visible) {
+            Button(lang.select("Full rebuild", "全量重读"), role: .destructive) { Task { await store.rebuildAllData() } }
+            Button(lang.select("Cancel", "取消"), role: .cancel) {}
         }
     }
 }
 
 struct WidgetGuideView: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HeaderBar(title: "Widgets", subtitle: "WidgetKit 小组件通过 App Group 读取共享摘要，不显示完整 API Key")
+            HeaderBar(title: lang.select("Widgets", "小组件"), subtitle: lang.select("WidgetKit widgets read a shared summary via the App Group and never show the full API Key", "WidgetKit 小组件通过 App Group 读取共享摘要，不显示完整 API Key"))
             GlassPanel {
                 VStack(alignment: .leading, spacing: 16) {
-                    Label("小号：今日总 tokens + 预算进度", systemImage: "rectangle")
-                    Label("中号：今日/本周 tokens、费用和趋势", systemImage: "rectangle.split.2x1")
-                    Label("大号：工具分布、模型分布、预算进度、最近更新时间", systemImage: "rectangle.grid.2x2")
-                    Button("写入 Widget 摘要 JSON") {
+                    Label(lang.select("Small: today's total tokens + budget progress", "小号：今日总 tokens + 预算进度"), systemImage: "rectangle")
+                    Label(lang.select("Medium: today/this-week tokens, cost and trend", "中号：今日/本周 tokens、费用和趋势"), systemImage: "rectangle.split.2x1")
+                    Label(lang.select("Large: tool distribution, model distribution, budget progress, last update time", "大号：工具分布、模型分布、预算进度、最近更新时间"), systemImage: "rectangle.grid.2x2")
+                    Button(lang.select("Write Widget summary JSON", "写入 Widget 摘要 JSON")) {
                         try? WidgetSummaryStore.save(store.widgetSummary())
                     }
-                    Text("生产打包时需为主 App 与 Widget Extension 配置相同 App Group entitlements。")
+                    Text(lang.select("For production packaging, the main app and the Widget Extension must share the same App Group entitlements.", "生产打包时需为主 App 与 Widget Extension 配置相同 App Group entitlements。"))
                         .font(.caption)
                         .foregroundStyle(Color.scopeTextMuted)
                 }
@@ -109,6 +127,7 @@ struct WidgetGuideView: View {
 
 struct MenuBarMiniPanel: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
 
     private struct MenuBarUsageRow: Identifiable {
         let id: TimeRange
@@ -119,9 +138,9 @@ struct MenuBarMiniPanel: View {
     private var menuBarRows: [MenuBarUsageRow] {
         let snapshot = store.dashboardSnapshot
         return [
-            MenuBarUsageRow(id: .today, label: TimeRange.today.rawValue, usage: snapshot.today),
-            MenuBarUsageRow(id: .week, label: TimeRange.week.rawValue, usage: snapshot.week),
-            MenuBarUsageRow(id: .month, label: TimeRange.month.rawValue, usage: snapshot.month)
+            MenuBarUsageRow(id: .today, label: TimeRange.today.displayName(lang), usage: snapshot.today),
+            MenuBarUsageRow(id: .week, label: TimeRange.week.displayName(lang), usage: snapshot.week),
+            MenuBarUsageRow(id: .month, label: TimeRange.month.displayName(lang), usage: snapshot.month)
         ]
     }
 
@@ -131,13 +150,13 @@ struct MenuBarMiniPanel: View {
                 .font(.headline)
             ForEach(menuBarRows) { row in
                 HStack {
-                    Text(row.label).frame(width: 48, alignment: .leading)
+                    Text(row.label).frame(width: 64, alignment: .leading)
                     Text("\(row.usage.totalTokens) tok").monospacedDigit()
                     Spacer()
                     Text(DecimalFormatting.currency(row.usage.estimatedCost)).monospacedDigit()
                 }
             }
-            Button("快速刷新") { Task { await store.refreshAll() } }
+            Button(lang.select("Quick refresh", "快速刷新")) { Task { await store.refreshAll() } }
         }
         .padding()
         .frame(width: 320)

@@ -30,8 +30,7 @@ public struct OpenCodeSQLiteUsageAdapter: UsageAdapter {
     }
 
     private func readMessages(path: String, pricing: [ModelPricing], since: Double?) -> [UsageRecord] {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return [] }
+        guard let db = ReadOnlySQLite.open(path) else { return [] }
         defer { sqlite3_close(db) }
 
         var sql = """

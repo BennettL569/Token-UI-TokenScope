@@ -3,6 +3,7 @@ import TokenScopeCore
 
 struct DashboardView: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
     private static let tokenFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -27,7 +28,7 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HeaderBar(title: "TokenScope", subtitle: "AI Tokens & Cost Command Center")
+                HeaderBar(title: "TokenScope", subtitle: lang.select("AI Tokens & Cost Command Center", "AI Tokens 与成本指挥中心"))
                 RangeFilterBar()
                 metrics
                 HStack(alignment: .top, spacing: 16) {
@@ -54,12 +55,12 @@ struct DashboardView: View {
     private var metrics: some View {
         let snapshot = store.dashboardSnapshot
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 14) {
-            MetricCard(title: "今日 Tokens", value: formatTokens(snapshot.today.totalTokens), subtitle: DecimalFormatting.currency(snapshot.today.estimatedCost), accent: .neonCyan)
-            MetricCard(title: "本周 Tokens", value: formatTokens(snapshot.week.totalTokens), subtitle: "缓存命中 \(formatPercent(snapshot.week.cacheHitRate))", accent: .neonPurple)
-            MetricCard(title: "本月 Tokens", value: formatTokens(snapshot.month.totalTokens), subtitle: "缓存命中 \(formatPercent(snapshot.month.cacheHitRate))", accent: .neonBlue)
-            MetricCard(title: "所选范围 Tokens", value: formatTokens(snapshot.selected.totalTokens), subtitle: selectedRangeSubtitle(usage: snapshot.selected), accent: .primary)
-            MetricCard(title: "缓存命中", value: formatPercent(snapshot.selected.cacheHitRate), subtitle: "所选范围缓存 \(formatTokens(snapshot.selected.cacheTokens)) tokens", accent: .neonBlue)
-            MetricCard(title: "全部 Tokens", value: formatTokens(snapshot.all.totalTokens), subtitle: "缓存 \(formatTokens(snapshot.all.cacheTokens)) · 命中 \(formatPercent(snapshot.all.cacheHitRate))", accent: .primary)
+            MetricCard(title: lang.select("Today Tokens", "今日 Tokens"), value: formatTokens(snapshot.today.totalTokens), subtitle: DecimalFormatting.currency(snapshot.today.estimatedCost), accent: .neonCyan)
+            MetricCard(title: lang.select("This Week Tokens", "本周 Tokens"), value: formatTokens(snapshot.week.totalTokens), subtitle: lang.select("Cache hit \(formatPercent(snapshot.week.cacheHitRate))", "缓存命中 \(formatPercent(snapshot.week.cacheHitRate))"), accent: .neonPurple)
+            MetricCard(title: lang.select("This Month Tokens", "本月 Tokens"), value: formatTokens(snapshot.month.totalTokens), subtitle: lang.select("Cache hit \(formatPercent(snapshot.month.cacheHitRate))", "缓存命中 \(formatPercent(snapshot.month.cacheHitRate))"), accent: .neonBlue)
+            MetricCard(title: lang.select("Selected Range Tokens", "所选范围 Tokens"), value: formatTokens(snapshot.selected.totalTokens), subtitle: selectedRangeSubtitle(usage: snapshot.selected), accent: .primary)
+            MetricCard(title: lang.select("Cache Hit", "缓存命中"), value: formatPercent(snapshot.selected.cacheHitRate), subtitle: lang.select("Selected-range cache \(formatTokens(snapshot.selected.cacheTokens)) tokens", "所选范围缓存 \(formatTokens(snapshot.selected.cacheTokens)) tokens"), accent: .neonBlue)
+            MetricCard(title: lang.select("All Tokens", "全部 Tokens"), value: formatTokens(snapshot.all.totalTokens), subtitle: lang.select("Cache \(formatTokens(snapshot.all.cacheTokens)) · hit \(formatPercent(snapshot.all.cacheHitRate))", "缓存 \(formatTokens(snapshot.all.cacheTokens)) · 命中 \(formatPercent(snapshot.all.cacheHitRate))"), accent: .primary)
         }
     }
 
@@ -73,14 +74,16 @@ struct DashboardView: View {
 
     private func selectedRangeSubtitle(usage: AggregatedUsage) -> String {
         if store.usesCustomDateRange {
-            return "\(Self.dateFormatter.string(from: store.customDateRange.start)) 至 \(Self.dateFormatter.string(from: store.customDateRange.end)) · \(DecimalFormatting.currency(usage.estimatedCost))"
+            let separator = lang.select(" to ", " 至 ")
+            return "\(Self.dateFormatter.string(from: store.customDateRange.start))\(separator)\(Self.dateFormatter.string(from: store.customDateRange.end)) · \(DecimalFormatting.currency(usage.estimatedCost))"
         }
-        return "\(store.selectedRange.rawValue) · \(DecimalFormatting.currency(usage.estimatedCost))"
+        return "\(store.selectedRange.displayName(lang)) · \(DecimalFormatting.currency(usage.estimatedCost))"
     }
 }
 
 struct HeaderBar: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
     let title: String
     let subtitle: String
 
@@ -106,7 +109,7 @@ struct HeaderBar: View {
             Button {
                 Task { await store.refreshAll() }
             } label: {
-                Label("刷新全部", systemImage: "arrow.clockwise")
+                Label(lang.select("Refresh All", "刷新全部"), systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .tint(.neonBlue)
@@ -116,24 +119,29 @@ struct HeaderBar: View {
 
 struct RangeFilterBar: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
+    /// Local mirror of the search field. Keystrokes update this immediately, but the store's
+    /// `searchText` (which drives the full-record-set dashboard rebuild) is only updated after
+    /// a short pause, so fast typing no longer triggers an O(records) rebuild per keystroke.
+    @State private var searchDraft = ""
 
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 12) {
-                    Picker("时间范围", selection: $store.selectedRange) {
-                        ForEach(TimeRange.allCases) { range in Text(range.rawValue).tag(range) }
+                    Picker(lang.select("Time Range", "时间范围"), selection: $store.selectedRange) {
+                        ForEach(TimeRange.allCases) { range in Text(range.displayName(lang)).tag(range) }
                     }
                     .pickerStyle(.segmented)
                     .frame(minWidth: 260, idealWidth: 360, maxWidth: 420)
                     .layoutPriority(1)
 
-                    Toggle("自定义", isOn: $store.usesCustomDateRange)
+                    Toggle(lang.select("Custom", "自定义"), isOn: $store.usesCustomDateRange)
                         .toggleStyle(.switch)
                         .fixedSize()
 
-                    Picker("工具", selection: Binding(get: { store.selectedTool ?? ToolKind?.none }, set: { store.selectedTool = $0 })) {
-                        Text("全部工具").tag(ToolKind?.none)
+                    Picker(lang.select("Tool", "工具"), selection: Binding(get: { store.selectedTool ?? ToolKind?.none }, set: { store.selectedTool = $0 })) {
+                        Text(lang.select("All Tools", "全部工具")).tag(ToolKind?.none)
                         ForEach(ToolKind.allCases) { tool in Text(tool.rawValue).tag(Optional(tool)) }
                     }
                     .frame(width: 180)
@@ -143,25 +151,32 @@ struct RangeFilterBar: View {
 
                 if store.usesCustomDateRange {
                     HStack(alignment: .center, spacing: 8) {
-                        Text("自定义范围")
+                        Text(lang.select("Custom Range", "自定义范围"))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Color.scopeTextMuted)
-                        DatePicker("开始", selection: Binding(get: { store.customDateRange.start }, set: { store.customDateRange = CustomDateRange(start: $0, end: store.customDateRange.end) }), displayedComponents: .date)
+                        DatePicker(lang.select("Start", "开始"), selection: Binding(get: { store.customDateRange.start }, set: { store.customDateRange = CustomDateRange(start: $0, end: store.customDateRange.end) }), displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .frame(width: 142)
-                        Text("至")
+                        Text(lang.select("to", "至"))
                             .font(.caption)
                             .foregroundStyle(Color.scopeTextMuted)
-                        DatePicker("结束", selection: Binding(get: { store.customDateRange.end }, set: { store.customDateRange = CustomDateRange(start: store.customDateRange.start, end: $0) }), displayedComponents: .date)
+                        DatePicker(lang.select("End", "结束"), selection: Binding(get: { store.customDateRange.end }, set: { store.customDateRange = CustomDateRange(start: store.customDateRange.start, end: $0) }), displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .frame(width: 142)
                         Spacer(minLength: 0)
                     }
                 }
 
-                TextField("搜索账号 / 模型 / API Key 标识", text: $store.searchText)
+                TextField(lang.select("Search account / model / API Key identity", "搜索账号 / 模型 / API Key 标识"), text: $searchDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
+                    .onAppear { if searchDraft != store.searchText { searchDraft = store.searchText } }
+                    .task(id: searchDraft) {
+                        // Debounce: a new keystroke cancels this task before the sleep elapses.
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        guard !Task.isCancelled, store.searchText != searchDraft else { return }
+                        store.searchText = searchDraft
+                    }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

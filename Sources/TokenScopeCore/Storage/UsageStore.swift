@@ -52,6 +52,14 @@ public final class UsageStore: ObservableObject {
     @Published public var errorMessage: String?
     @Published public var isRefreshing = false
     @Published public var menuBarShowsCost = false
+    /// UI language. Defaults to English; the choice is persisted to `UserDefaults` and applied
+    /// live (every view observing the store re-renders when it changes).
+    @Published public var language: AppLanguage {
+        didSet {
+            guard oldValue != language else { return }
+            UserDefaults.standard.set(language.rawValue, forKey: Self.languageDefaultsKey)
+        }
+    }
     @Published public var refreshProgress: String = ""
     @Published public var budgetProgressMode: BudgetProgressMode = .tokens {
         didSet { rebuildDashboardSnapshot() }
@@ -59,6 +67,19 @@ public final class UsageStore: ObservableObject {
 
     private let repository: PersistentUsageRepository
     private let registry: AdapterRegistry
+
+    static let languageDefaultsKey = "TokenScopeLanguage"
+    /// Bumped whenever token parsing changes in a way that makes previously-imported records
+    /// wrong. On launch, a stored value behind this triggers a one-time full reparse so the fix
+    /// reaches historical data (incremental sync alone only re-reads newly appended log bytes).
+    /// v2: Claude cache-creation double-count fixed; Codex cached/reasoning tokens de-duplicated.
+    static let parserVersion = 2
+    static let parserVersionDefaultsKey = "TokenScopeParserVersion"
+
+    /// Localizes an inline English/Chinese pair for the current `language`.
+    public func L(_ english: String, _ chinese: String) -> String {
+        language.select(english, chinese)
+    }
 
     /// Filter-independent aggregates (today / week / month / all). These depend only on
     /// `records` and the current calendar day — NOT on searchText / selectedTool /
@@ -95,6 +116,7 @@ public final class UsageStore: ObservableObject {
     public init(repository: PersistentUsageRepository = PersistentUsageRepository(), registry: AdapterRegistry = AdapterRegistry()) {
         self.repository = repository
         self.registry = registry
+        self.language = UserDefaults.standard.string(forKey: Self.languageDefaultsKey).flatMap(AppLanguage.init(rawValue:)) ?? .english
         self.sources = Self.defaultSources()
         let calendar = Calendar.current
         let now = Date()
@@ -123,7 +145,7 @@ public final class UsageStore: ObservableObject {
     @MainActor
     public func refreshAll(fullScan: Bool = false) async {
         isRefreshing = true
-        refreshProgress = fullScan ? "准备全量重读" : "准备增量同步"
+        refreshProgress = fullScan ? L("Preparing full rescan", "准备全量重读") : L("Preparing incremental sync", "准备增量同步")
         errorMessage = nil
         // The repository is thread-safe (NSLock) and Sendable, so its heavy synchronous
         // work (writing new rows, reloading the full table) is run off the main thread via
@@ -135,14 +157,14 @@ public final class UsageStore: ObservableObject {
         for index in refreshedSources.indices where refreshedSources[index].isEnabled {
             let source = refreshedSources[index]
             guard let adapter = registry.adapter(for: source.tool) else { continue }
-            let modeText = fullScan ? "全量读取中" : "增量读取中"
+            let modeText = fullScan ? L("Full read in progress", "全量读取中") : L("Incremental read in progress", "增量读取中")
             refreshedSources[index].syncStatus = SyncStatus(kind: .syncing, lastSync: Date(), message: modeText)
             sources = refreshedSources
-            refreshProgress = "正在\(fullScan ? "全量" : "增量")读取 \(source.tool.rawValue)…"
+            refreshProgress = L("Reading \(source.tool.rawValue)…", "正在\(fullScan ? "全量" : "增量")读取 \(source.tool.rawValue)…")
             do {
                 let newRecords = try await adapter.refresh(source: source, pricing: pricing, cursorStore: repo, fullScan: fullScan)
                 await Task.detached { repo.upsert(newRecords) }.value
-                refreshedSources[index].syncStatus = SyncStatus(kind: .success, lastSync: Date(), message: "已同步 \(newRecords.count) 条新增/更新")
+                refreshedSources[index].syncStatus = SyncStatus(kind: .success, lastSync: Date(), message: L("Synced \(newRecords.count) new/updated", "已同步 \(newRecords.count) 条新增/更新"))
             } catch {
                 errors.append("\(source.tool.rawValue): \(error.localizedDescription)")
                 refreshedSources[index].syncStatus = SyncStatus(kind: .failed, lastSync: Date(), message: error.localizedDescription)
@@ -158,8 +180,22 @@ public final class UsageStore: ObservableObject {
         let summary = await Task.detached { UsageStore.makeWidgetSummary(records: reloaded, budgets: budgetsSnapshot, budgetProgressMode: mode) }.value
         try? WidgetSummaryStore.save(summary)
         errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        refreshProgress = errors.isEmpty ? "同步完成：\(records.count) 条" : "同步完成，有 \(errors.count) 个错误"
+        refreshProgress = errors.isEmpty ? L("Sync complete: \(records.count) records", "同步完成：\(records.count) 条") : L("Sync finished with \(errors.count) error(s)", "同步完成，有 \(errors.count) 个错误")
         isRefreshing = false
+    }
+
+    /// Entry point for the app's launch refresh. If the parser was corrected since the data was
+    /// last imported, reparse everything once so historical records reflect the fix; otherwise
+    /// only do the normal incremental refresh when there is nothing loaded yet.
+    @MainActor
+    public func refreshOnLaunch() async {
+        let storedParserVersion = UserDefaults.standard.integer(forKey: Self.parserVersionDefaultsKey)
+        if storedParserVersion < Self.parserVersion {
+            UserDefaults.standard.set(Self.parserVersion, forKey: Self.parserVersionDefaultsKey)
+            await rebuildAllData()
+        } else if records.isEmpty {
+            await refreshAll()
+        }
     }
 
     @MainActor
@@ -222,13 +258,7 @@ public final class UsageStore: ObservableObject {
         if let cached = baseAggregateCache, calendar.isDate(cached.day, inSameDayAs: now) {
             base = cached
         } else {
-            base = BaseAggregateCache(
-                day: now,
-                today: AggregationEngine.aggregate(records: records, range: .today, now: now, calendar: calendar),
-                week: AggregationEngine.aggregate(records: records, range: .week, now: now, calendar: calendar),
-                month: AggregationEngine.aggregate(records: records, range: .month, now: now, calendar: calendar),
-                all: AggregationEngine.aggregate(records: records, range: .all, now: now, calendar: calendar)
-            )
+            base = Self.computeBaseAggregates(records: records, now: now, calendar: calendar)
             baseAggregateCache = base
         }
 
@@ -261,17 +291,9 @@ public final class UsageStore: ObservableObject {
                     || record.model.localizedCaseInsensitiveContains(searchTextForSnapshot)
                     || record.apiKeyHash.localizedCaseInsensitiveContains(searchTextForSnapshot) else { continue }
             }
-            selected.inputTokens += record.inputTokens
-            selected.outputTokens += record.outputTokens
-            selected.cacheTokens += record.cacheTokens
-            selected.totalTokens += record.totalTokens
-            selected.estimatedCost += record.estimatedCost
+            Self.accumulate(&selected, record)
             var group = toolGroups[record.source] ?? AggregatedUsage()
-            group.inputTokens += record.inputTokens
-            group.outputTokens += record.outputTokens
-            group.cacheTokens += record.cacheTokens
-            group.totalTokens += record.totalTokens
-            group.estimatedCost += record.estimatedCost
+            Self.accumulate(&group, record)
             toolGroups[record.source] = group
             if recentRecords.count < 6 { recentRecords.append(record) }
         }
@@ -285,6 +307,37 @@ public final class UsageStore: ObservableObject {
             BudgetProgressSnapshot(rule: rule, usage: usageByBudgetPeriod[rule.period] ?? AggregatedUsage(), mode: budgetProgressMode)
         }
         dashboardSnapshot = DashboardSnapshot(today: base.today, week: base.week, month: base.month, selected: selected, all: base.all, trend: trend, toolGroups: toolGroups, recentRecords: recentRecords, budgetRows: budgetRows)
+    }
+
+    /// Computes the filter-independent today/week/month/all aggregates in a single pass using
+    /// precomputed half-open bounds (cheap `Date` comparisons) instead of four separate
+    /// `Calendar`-membership passes. The bounds are derived to match `TimeRange.contains`
+    /// exactly, so the result is identical to the previous `AggregationEngine.aggregate` calls
+    /// — just far cheaper over large record sets, which is what the dashboard rebuild walks.
+    private static func computeBaseAggregates(records: [UsageRecord], now: Date, calendar: Calendar) -> BaseAggregateCache {
+        let todayBounds = ActiveRangeBounds(range: .today, customRange: nil, now: now, calendar: calendar)
+        let weekBounds = ActiveRangeBounds(range: .week, customRange: nil, now: now, calendar: calendar)
+        let monthBounds = ActiveRangeBounds(range: .month, customRange: nil, now: now, calendar: calendar)
+        var today = AggregatedUsage()
+        var week = AggregatedUsage()
+        var month = AggregatedUsage()
+        var all = AggregatedUsage()
+        for record in records {
+            let timestamp = record.timestamp
+            accumulate(&all, record)
+            if todayBounds.contains(timestamp) { accumulate(&today, record) }
+            if weekBounds.contains(timestamp) { accumulate(&week, record) }
+            if monthBounds.contains(timestamp) { accumulate(&month, record) }
+        }
+        return BaseAggregateCache(day: now, today: today, week: week, month: month, all: all)
+    }
+
+    private static func accumulate(_ aggregate: inout AggregatedUsage, _ record: UsageRecord) {
+        aggregate.inputTokens += record.inputTokens
+        aggregate.outputTokens += record.outputTokens
+        aggregate.cacheTokens += record.cacheTokens
+        aggregate.totalTokens += record.totalTokens
+        aggregate.estimatedCost += record.estimatedCost
     }
 
     private static func trendCacheKey(range: TimeRange, customRange: CustomDateRange?, now: Date, calendar: Calendar) -> String {
@@ -354,7 +407,7 @@ public final class UsageStore: ObservableObject {
 
     public static func defaultSources() -> [UsageSource] {
         ToolKind.allCases.map { tool in
-            UsageSource(tool: tool, name: "\(tool.rawValue) 自动发现", accountId: "auto-\(tool.rawValue.lowercased())", apiKeyIdentity: "auto-discovered", localLogPath: "")
+            UsageSource(tool: tool, name: "\(tool.rawValue) auto-discovery", accountId: "auto-\(tool.rawValue.lowercased())", apiKeyIdentity: "auto-discovered", localLogPath: "")
         }
     }
 

@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.0.1-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.0-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -24,7 +24,9 @@
 - [Architecture](#architecture)
 - [Storage, dedup & incremental sync](#storage-dedup--incremental-sync)
 - [Cost estimation & budgets](#cost-estimation--budgets)
-- [Performance (v1.0.1)](#performance-v101)
+- [Language (English / 中文)](#language-english--中文)
+- [Token accuracy](#token-accuracy)
+- [Performance](#performance)
 - [Privacy & security](#privacy--security)
 - [Project structure](#project-structure)
 - [Version history](#version-history)
@@ -39,12 +41,13 @@
 
 It **only reads local files and local SQLite databases**, normalizes and aggregates everything on-device, and needs **no API key** to count usage. The UI is a light sci-fi glassmorphism dashboard and also ships a menu-bar mini panel plus WidgetKit widget source.
 
-> The UI strings, enum `rawValue`s and sync-status messages are written in **Chinese**, and some of those Chinese strings are persisted as SQLite keys (see the conventions note under [Architecture](#architecture)).
+> The interface is **bilingual (English / 中文)** and defaults to **English**; switch it live in **Settings**. Internally, some enum `rawValue`s are still Chinese because they are persisted as SQLite keys — those are mapped to localized labels for display and never shown raw (see the conventions note under [Architecture](#architecture)).
 
 ---
 
 ## Features
 
+- **Bilingual UI (English / 中文)** — English by default; switch language live in Settings and the choice is persisted.
 - **Unified multi-tool tracking** — aggregates usage from Claude Code, Codex, Hermes, OpenClaw and OpenCode in one place.
 - **Local-first, zero upload** — reads local logs / SQLite only; data stays on your machine. No telemetry, no upload path.
 - **Incremental sync** — per-file resume cursors mean only newly appended data is parsed by default; a full re-read is one click away.
@@ -137,7 +140,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 21 checks passed
+#    expected: TokenScopeCoreTestsRunner: 23 checks passed
 
 # 2) Swift Testing suite
 swift test
@@ -268,13 +271,32 @@ Alert levels: `< 0.8` normal · `< 1` warning · `≥ 1` exceeded.
 
 ---
 
-## Performance (v1.0.1)
+## Language (English / 中文)
 
-v1.0.1 fixes severe frame drops / stutter while searching or changing filters (the cause was synchronous main-thread work, not UI effects):
+The whole interface is available in **English** (default) and **中文**. Switch it live under **Settings → Language**; the choice is saved to `UserDefaults` and applied immediately to every view (including the menu-bar panel). Time ranges, budget periods and progress modes have localized labels while their persisted SQLite keys stay unchanged.
 
-- **Dashboard snapshot** — filter-independent aggregates (today/week/month/all) and the trend are cached (invalidated when records change or the day rolls over); filter-dependent values are computed in a single pass using precomputed range bounds. Per-keystroke main-thread work drops from ~8 Calendar+Decimal passes over the whole record set to one cheap pass.
+---
+
+## Token accuracy
+
+Token counting is normalized to **disjoint `input` + `output` + `cache` buckets that sum to the total**, matching each tool's own accounting:
+
+- **Claude Code** — `cache_creation_input_tokens` is the canonical cache-creation total; its `cache_creation.ephemeral_*` breakdown is no longer added on top (it previously double-counted cache, inflating totals).
+- **Codex** — follows OpenAI accounting where `total = input + output`: `cached_input_tokens` is split out of `input` (instead of added on top) and `reasoning_output_tokens` is kept inside `output` (instead of added again). This removes a large over-count on big sessions.
+- **OpenCode / Hermes (SQLite)** — WAL-mode databases are now opened robustly: a plain read-only open of a WAL database whose `-wal`/`-shm` sidecars are absent (the writing app isn't running) used to fail and **silently drop that tool's usage**; it now falls back to an immutable read.
+- On first launch after upgrading, a one-time full rescan re-derives historical records with the corrected math (tracked by an internal parser version); afterwards, incremental sync is unaffected.
+
+---
+
+## Performance
+
+The app does heavy work (parsing potentially **gigabytes** of local logs) without blocking the UI. Beyond the v1.0.1 dashboard work, v1.1.0 makes a full rescan dramatically cheaper:
+
+- **Parsing** — JSONL parsers gate on a cheap substring before the full JSON decode (e.g. only Codex `token_count` lines are decoded), and the ISO-8601 date formatters are created once instead of per line. Together these cut a multi-gigabyte rescan from minutes toward seconds of CPU.
+- **Persistence** — batch upserts reuse one prepared statement inside a single transaction instead of re-compiling SQL and running an implicit transaction per row.
+- **Dashboard snapshot** — filter-independent aggregates (today/week/month/all) and the trend are cached (invalidated when records change or the day rolls over); the base aggregates are computed in one precomputed-bounds pass instead of several `Calendar`-membership passes, and the search field is debounced so typing no longer triggers an O(records) rebuild per keystroke.
+- **Off-main refresh/persistence** — log parsing, upsert, full-table reload and widget-summary aggregation run off the main thread, so launch/refresh and the one-time corrective rescan never freeze the UI.
 - **Window configuration** — windows are configured once instead of on every AppKit `applicationDidUpdate` tick.
-- **Off-main refresh/persistence** — upsert, full-table reload, widget-summary aggregation and pricing/budget writes run off the main thread, so launch/refresh no longer freezes the UI.
 
 ---
 
@@ -316,6 +338,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.0** | Bilingual UI (English default + 中文, live switch). Token-accuracy fixes (Claude cache double-count; Codex cached/reasoning de-dup) with a one-time corrective rescan. Fix WAL-mode SQLite read-only open that silently dropped OpenCode/Hermes usage. Faster rescans (substring-gated parsing, cached date formatters, batched transactional upserts, single-pass base aggregates, debounced search). |
 | **v1.0.1** | Performance: eliminate dashboard frame drops (snapshot caching + single-pass + precomputed bounds); configure windows once; move refresh/persistence off the main thread. |
 | **v1.0.0** | Initial release: 5-tool adapters, SQLite persistence, cost estimation, budgets, export, menu bar, WidgetKit source. |
 

@@ -2,6 +2,10 @@ import Foundation
 
 public enum LocalUsageParser {
     public static func parseClaudeLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        // Cheap substring gate before the expensive JSON parse: a usage-bearing line is an
+        // assistant message and always contains both markers, so anything missing them cannot
+        // produce a record. This skips full JSONSerialization on the bulk of the log.
+        guard line.contains("assistant"), line.contains("usage") else { return nil }
         guard let object = parseJSONObject(line),
               string(object["type"]) == "assistant",
               let message = object["message"] as? [String: Any],
@@ -12,7 +16,12 @@ public enum LocalUsageParser {
         let cacheRead = int(usage["cache_read_input_tokens"])
         let cacheCreationDetail = usage["cache_creation"] as? [String: Any]
         let cacheDetailSum = int(cacheCreationDetail?["ephemeral_1h_input_tokens"]) + int(cacheCreationDetail?["ephemeral_5m_input_tokens"])
-        let cache = cacheCreation + cacheRead + cacheDetailSum
+        // `cache_creation_input_tokens` is the canonical cache-creation total; the
+        // `cache_creation.ephemeral_*` fields are a breakdown that sums to that same value.
+        // Adding both double-counts cache (and inflates total), so use the breakdown only as a
+        // fallback when the canonical field is absent.
+        let cacheCreationTotal = cacheCreation > 0 ? cacheCreation : cacheDetailSum
+        let cache = cacheCreationTotal + cacheRead
         guard input + output + cache > 0 else { return nil }
         let timestamp = parseDate(string(object["timestamp"])) ?? Date()
         let model = string(message["model"]) ?? "unknown"
@@ -23,6 +32,10 @@ public enum LocalUsageParser {
     }
 
     public static func parseCodexLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        // Cheap substring gate: only `token_count` events carry usage, and they are a small
+        // fraction of the (very large) Codex rollout logs. Skipping the JSON parse for every
+        // other line is the single biggest win when rescanning gigabytes of sessions.
+        guard line.contains("token_count") else { return nil }
         guard let object = parseJSONObject(line),
               string(object["type"]) == "event_msg",
               let payload = object["payload"] as? [String: Any],
@@ -30,9 +43,15 @@ public enum LocalUsageParser {
               let info = payload["info"] as? [String: Any] else { return nil }
         let usage = (info["last_token_usage"] as? [String: Any]) ?? (info["total_token_usage"] as? [String: Any])
         guard let usage else { return nil }
-        let input = int(usage["input_tokens"])
-        let output = int(usage["output_tokens"]) + int(usage["reasoning_output_tokens"])
+        // Codex follows OpenAI accounting where `total_tokens == input_tokens + output_tokens`:
+        //  • `cached_input_tokens` is a SUBSET of `input_tokens` (cache reads), and
+        //  • `reasoning_output_tokens` is a SUBSET of `output_tokens`.
+        // The app models input/output/cache as disjoint buckets that sum to the total, so split
+        // cached tokens out of the input and keep output as-is (it already includes reasoning).
+        // Adding them on top — as before — double-counted cache and reasoning.
         let cache = int(usage["cached_input_tokens"])
+        let input = max(0, int(usage["input_tokens"]) - cache)
+        let output = int(usage["output_tokens"])
         guard input + output + cache > 0 else { return nil }
         let timestamp = parseDate(string(object["timestamp"])) ?? Date()
         let model = "codex"
@@ -42,6 +61,9 @@ public enum LocalUsageParser {
     }
 
     public static func parseOpenClawLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        // Cheap substring gate before the full JSON parse: a record always comes from a line
+        // carrying a `usage` object (directly or inside `messagesSnapshot`).
+        guard line.contains("usage") else { return nil }
         guard let object = parseJSONObject(line) else { return nil }
         var message = object["message"] as? [String: Any]
         if message == nil, let data = object["data"] as? [String: Any], let snapshot = data["messagesSnapshot"] as? [[String: Any]] {
@@ -122,13 +144,26 @@ public enum LocalUsageParser {
         return nil
     }
 
+    // ISO8601DateFormatter is very expensive to allocate and is thread-safe for parsing, so the
+    // two configurations are created once and reused. Allocating a formatter per line (the
+    // previous behaviour) dominated CPU time when scanning gigabytes of JSONL.
+    // Configured once and only ever read from (`date(from:)`), which is thread-safe; the
+    // `nonisolated(unsafe)` annotation vouches for that under Swift 6 strict concurrency.
+    nonisolated(unsafe) private static let isoFractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    nonisolated(unsafe) private static let isoPlainFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     static func parseDate(_ value: String?) -> Date? {
         guard let value else { return nil }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = iso.date(from: value) { return date }
-        iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: value)
+        if let date = isoFractionalFormatter.date(from: value) { return date }
+        return isoPlainFormatter.date(from: value)
     }
 
     private static func normalizedEpoch(_ value: Double) -> Double {

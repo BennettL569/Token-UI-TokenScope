@@ -26,9 +26,21 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         guard !records.isEmpty else { return }
         lock.lock()
         defer { lock.unlock() }
+        // Prepare the statement once and reuse it for the whole batch inside a single
+        // transaction. The previous implementation re-compiled the SQL and ran an implicit
+        // transaction for every row, which made full rescans (tens of thousands of rows)
+        // pathologically slow and hammered the WAL. All of this runs off the main thread.
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, Self.upsertSQL, -1, &statement, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
         for record in records {
-            upsertLocked(record)
+            bindUsageRecord(statement, record)
+            sqlite3_step(statement)
+            sqlite3_reset(statement)
+            sqlite3_clear_bindings(statement)
         }
+        sqlite3_exec(db, "COMMIT", nil, nil, nil)
     }
 
     public func all() -> [UsageRecord] {
@@ -241,8 +253,7 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         """, nil, nil, nil)
     }
 
-    private func upsertLocked(_ record: UsageRecord) {
-        let sql = """
+    private static let upsertSQL = """
         INSERT INTO usage_records (
             dedupe_key, id, source, account_id, api_key_hash, model, timestamp,
             input_tokens, output_tokens, cache_tokens, total_tokens, estimated_cost,
@@ -263,9 +274,10 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
             request_id=excluded.request_id,
             raw_source=excluded.raw_source
         """
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(statement) }
+
+    /// Binds a record onto an already-prepared `upsertSQL` statement. The caller owns stepping,
+    /// resetting and finalizing the statement so it can be reused across a batch.
+    private func bindUsageRecord(_ statement: OpaquePointer?, _ record: UsageRecord) {
         bind(statement, 1, record.dedupeKey)
         bind(statement, 2, record.id.uuidString)
         bind(statement, 3, record.source.rawValue)
@@ -280,7 +292,6 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         sqlite3_bind_double(statement, 12, NSDecimalNumber(decimal: record.estimatedCost).doubleValue)
         if let requestId = record.requestId { bind(statement, 13, requestId) } else { sqlite3_bind_null(statement, 13) }
         bind(statement, 14, record.rawSource)
-        sqlite3_step(statement)
     }
 
     private func upsertPricingLocked(_ item: ModelPricing) {

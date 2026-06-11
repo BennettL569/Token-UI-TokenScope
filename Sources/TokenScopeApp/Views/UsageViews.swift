@@ -2,6 +2,7 @@ import SwiftUI
 import TokenScopeCore
 
 struct ToolDistributionView: View {
+    @Environment(\.appLanguage) private var lang
     let groups: [ToolKind: AggregatedUsage]
     private static let percentFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -14,10 +15,10 @@ struct ToolDistributionView: View {
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
-                Text("工具分布")
+                Text(lang.select("Tool Distribution", "工具分布"))
                     .font(.headline)
                 if groups.isEmpty {
-                    ContentUnavailableView("暂无工具统计", systemImage: "square.stack.3d.up.slash")
+                    ContentUnavailableView(lang.select("No tool stats yet", "暂无工具统计"), systemImage: "square.stack.3d.up.slash")
                 } else {
                     ForEach(ToolKind.allCases) { tool in
                         let value = groups[tool]?.totalTokens ?? 0
@@ -28,7 +29,7 @@ struct ToolDistributionView: View {
                                 .tint(tool == .claudeCode ? .neonCyan : tool == .codeX ? .neonBlue : tool == .hermes ? .neonPurple : .white)
                             VStack(alignment: .trailing, spacing: 2) {
                                 Text("\(value)").font(.caption.monospacedDigit())
-                                Text("缓存 \(Self.percentFormatter.string(from: NSNumber(value: cacheHitRate)) ?? "0%")")
+                                Text(lang.select("Cache \(Self.percentFormatter.string(from: NSNumber(value: cacheHitRate)) ?? "0%")", "缓存 \(Self.percentFormatter.string(from: NSNumber(value: cacheHitRate)) ?? "0%")"))
                                     .font(.caption2.monospacedDigit())
                                     .foregroundStyle(Color.scopeTextMuted)
                             }
@@ -42,18 +43,19 @@ struct ToolDistributionView: View {
 }
 
 struct RecentUsageView: View {
+    @Environment(\.appLanguage) private var lang
     let records: [UsageRecord]
 
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
-                Text("最近明细")
+                Text(lang.select("Recent Detail", "最近明细"))
                     .font(.headline)
                 Table(records) {
-                    TableColumn("工具") { Text($0.source.rawValue).lineLimit(1) }
-                    TableColumn("模型") { Text($0.model).lineLimit(1).minimumScaleFactor(0.7) }
+                    TableColumn(lang.select("Tool", "工具")) { Text($0.source.rawValue).lineLimit(1) }
+                    TableColumn(lang.select("Model", "模型")) { Text($0.model).lineLimit(1).minimumScaleFactor(0.7) }
                     TableColumn("Tokens") { Text("\($0.totalTokens)").monospacedDigit() }
-                    TableColumn("费用") { Text(DecimalFormatting.currency($0.estimatedCost)).monospacedDigit() }
+                    TableColumn(lang.select("Cost", "费用")) { Text(DecimalFormatting.currency($0.estimatedCost)).monospacedDigit() }
                 }
                 .frame(minHeight: 170)
             }
@@ -63,6 +65,7 @@ struct RecentUsageView: View {
 
 struct UsageDetailView: View {
     @EnvironmentObject private var store: UsageStore
+    @Environment(\.appLanguage) private var lang
     @State private var selected: UsageRecord.ID?
 
     private var filteredRecordsSnapshot: [UsageRecord] {
@@ -71,19 +74,19 @@ struct UsageDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HeaderBar(title: "Usage 明细", subtitle: "按工具、账号、API Key 标识、模型筛选和搜索")
+            HeaderBar(title: lang.select("Usage Detail", "用量明细"), subtitle: lang.select("Filter and search by tool, account, API Key identity, model", "按工具、账号、API Key 标识、模型筛选和搜索"))
             RangeFilterBar()
             GlassPanel {
                 Table(filteredRecordsSnapshot, selection: $selected) {
-                    TableColumn("工具") { Text($0.source.rawValue) }
-                    TableColumn("账号") { Text($0.accountId).lineLimit(1).minimumScaleFactor(0.75) }
+                    TableColumn(lang.select("Tool", "工具")) { Text($0.source.rawValue) }
+                    TableColumn(lang.select("Account", "账号")) { Text($0.accountId).lineLimit(1).minimumScaleFactor(0.75) }
                     TableColumn("API Key") { Text($0.apiKeyHash).lineLimit(1).minimumScaleFactor(0.75) }
-                    TableColumn("模型") { Text($0.model).lineLimit(1).minimumScaleFactor(0.75) }
-                    TableColumn("输入") { Text("\($0.inputTokens)").monospacedDigit() }
-                    TableColumn("输出") { Text("\($0.outputTokens)").monospacedDigit() }
-                    TableColumn("缓存命中") { Text("\($0.cacheTokens)").monospacedDigit().foregroundStyle($0.cacheTokens > 0 ? Color.neonBlue : Color.scopeTextMuted) }
-                    TableColumn("总量") { Text("\($0.totalTokens)").monospacedDigit() }
-                    TableColumn("费用") { Text(DecimalFormatting.currency($0.estimatedCost)).monospacedDigit() }
+                    TableColumn(lang.select("Model", "模型")) { Text($0.model).lineLimit(1).minimumScaleFactor(0.75) }
+                    TableColumn(lang.select("Input", "输入")) { Text("\($0.inputTokens)").monospacedDigit() }
+                    TableColumn(lang.select("Output", "输出")) { Text("\($0.outputTokens)").monospacedDigit() }
+                    TableColumn(lang.select("Cache Hit", "缓存命中")) { Text("\($0.cacheTokens)").monospacedDigit().foregroundStyle($0.cacheTokens > 0 ? Color.neonBlue : Color.scopeTextMuted) }
+                    TableColumn(lang.select("Total", "总量")) { Text("\($0.totalTokens)").monospacedDigit() }
+                    TableColumn(lang.select("Cost", "费用")) { Text(DecimalFormatting.currency($0.estimatedCost)).monospacedDigit() }
                 }
                 .frame(minHeight: 480)
             }

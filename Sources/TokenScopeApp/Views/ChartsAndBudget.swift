@@ -2,15 +2,16 @@ import SwiftUI
 import TokenScopeCore
 
 struct TrendChartView: View {
+    @Environment(\.appLanguage) private var lang
     let buckets: [TrendBucket]
 
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Tokens 趋势")
+                Text(lang.select("Tokens Trend", "Tokens 趋势"))
                     .font(.headline)
                 if buckets.isEmpty {
-                    ContentUnavailableView("暂无趋势数据", systemImage: "waveform.path.ecg", description: Text("刷新或导入数据后显示逐小时/每日/每月趋势"))
+                    ContentUnavailableView(lang.select("No trend data", "暂无趋势数据"), systemImage: "waveform.path.ecg", description: Text(lang.select("Hourly / daily / monthly trend appears after refresh or import", "刷新或导入数据后显示逐小时/每日/每月趋势")))
                         .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
                     GeometryReader { proxy in
@@ -31,9 +32,9 @@ struct TrendChartView: View {
                     }
                     .frame(minHeight: 190)
                     HStack(spacing: 14) {
-                        legend("输入", .neonCyan)
-                        legend("输出", .neonPurple)
-                        legend("缓存", .neonBlue)
+                        legend(lang.select("Input", "输入"), .neonCyan)
+                        legend(lang.select("Output", "输出"), .neonPurple)
+                        legend(lang.select("Cache", "缓存"), .neonBlue)
                         Spacer()
                     }
                 }
@@ -62,6 +63,7 @@ struct TrendChartView: View {
 }
 
 struct BudgetOverviewView: View {
+    @Environment(\.appLanguage) private var lang
     let rows: [BudgetProgressSnapshot]
     @Binding var budgetProgressMode: BudgetProgressMode
 
@@ -69,12 +71,12 @@ struct BudgetOverviewView: View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("预算雷达")
+                    Text(lang.select("Budget Radar", "预算雷达"))
                         .font(.headline)
                     Spacer()
-                    Picker("预算进度", selection: $budgetProgressMode) {
+                    Picker(lang.select("Budget Progress", "预算进度"), selection: $budgetProgressMode) {
                         ForEach(BudgetProgressMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.displayName(lang)).tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -88,14 +90,14 @@ struct BudgetOverviewView: View {
                     let progress = row.activeProgress
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text(rule.period.rawValue).font(.subheadline.weight(.semibold))
+                            Text(rule.period.displayName(lang)).font(.subheadline.weight(.semibold))
                             Spacer()
                             Text("\(Int(progress * 100))%")
                                 .foregroundStyle(color(for: progress))
                         }
                         ProgressView(value: min(progress, 1))
                             .tint(color(for: progress))
-                        Text("Tokens \(Int(tokenProgress * 100))% · 费用 \(Int(costProgress * 100))%  ｜  \(usage.totalTokens)/\(rule.tokenLimit) tokens · \(DecimalFormatting.currency(usage.estimatedCost))/\(DecimalFormatting.currency(rule.costLimit))")
+                        Text(lang.select("Tokens \(Int(tokenProgress * 100))% · Cost \(Int(costProgress * 100))%  ｜  \(usage.totalTokens)/\(rule.tokenLimit) tokens · \(DecimalFormatting.currency(usage.estimatedCost))/\(DecimalFormatting.currency(rule.costLimit))", "Tokens \(Int(tokenProgress * 100))% · 费用 \(Int(costProgress * 100))%  ｜  \(usage.totalTokens)/\(rule.tokenLimit) tokens · \(DecimalFormatting.currency(usage.estimatedCost))/\(DecimalFormatting.currency(rule.costLimit))"))
                             .font(.caption)
                             .foregroundStyle(Color.scopeTextMuted)
                             .lineLimit(1)

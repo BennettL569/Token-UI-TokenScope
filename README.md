@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.1-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.2-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -82,20 +82,22 @@ Five built-in adapters:
 
 1. Grab the latest `TokenScope-<version>.dmg` or `TokenScope-<version>-macOS.zip` from [Releases](https://github.com/BennettL569/Token-UI-TokenScope/releases).
 2. Open the `.dmg` and drag `TokenScope.app` into Applications (or unzip and drag it in).
-3. **First launch**: this build is **ad-hoc signed and not notarized by Apple**, so Gatekeeper may block it. **Right-click the app → Open** (once), or run:
+3. **First launch (Gatekeeper)**: this build is **ad-hoc signed and not notarized by Apple**, so macOS blocks it the first time. Allow it one of two ways:
+   - **No Terminal:** double-click it once and dismiss the warning, then open **System Settings → Privacy & Security**, scroll to the message about *TokenScope* and click **Open Anyway** → **Open**. _(On macOS 15+ the old right-click → Open shortcut no longer works — use this.)_
+   - **Terminal:** remove the quarantine flag, then open it normally:
 
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/TokenScope.app
-   ```
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/TokenScope.app
+     ```
 
-> Requires **macOS 14+**. The app is a **non-sandboxed** build so it can read local logs under `~/.claude`, `~/.codex`, etc.
+> Requires **macOS 14+** on **Apple Silicon or Intel** — the release is a **universal binary**. The app is a **non-sandboxed** build so it can read local logs under `~/.claude`, `~/.codex`, etc. It is **not notarized** (no paid Apple Developer ID), which is why the first-launch step above is needed.
 
 ### Option B — build & install yourself
 
 ```bash
 git clone https://github.com/BennettL569/Token-UI-TokenScope.git
 cd Token-UI-TokenScope
-packaging/build_app.sh          # → dist/TokenScope.app (release, ad-hoc signed, non-sandboxed)
+packaging/build_app.sh          # → dist/TokenScope.app (universal arm64+x86_64, ad-hoc signed, non-sandboxed)
 cp -R dist/TokenScope.app /Applications/
 ```
 
@@ -125,8 +127,8 @@ swift build -c release --product TokenScope   # release build
 ### Package
 
 ```bash
-packaging/build_app.sh    # → dist/TokenScope.app (release + .icns + ad-hoc signing; non-sandboxed/unnotarized)
-packaging/build_dmg.sh    # → dist/TokenScope-<version>.dmg (with an /Applications drag symlink)
+packaging/build_app.sh    # → dist/TokenScope.app (universal arm64+x86_64 + .icns + ad-hoc signing; non-sandboxed/unnotarized)
+packaging/build_dmg.sh    # → dist/TokenScope-<version>.dmg (universal; with an /Applications drag symlink)
 ```
 
 > SwiftPM **cannot** build the WidgetKit extension. `TokenScope.xcodeproj` mirrors the same sources and is the **only** way to build `TokenScopeWidgetsExtension`. Note: the Xcode build enables App Sandbox (`files.user-selected.read-only` only), under which the home-directory log adapters cannot read — which is why `swift run` / `build_app.sh` produce **non-sandboxed** binaries.
@@ -338,6 +340,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.2** | Ship a **universal binary** (arm64 + x86_64) so the release runs on both Apple Silicon and Intel Macs. Update the install docs for macOS 15+/26 Gatekeeper (System Settings → Open Anyway / `xattr`). No code changes. |
 | **v1.1.1** | Fix dropped frames when changing the time range or custom dates: the dashboard snapshot is recomputed off the main thread (coalesced), so a filter change costs ~0 ms on the main thread instead of ~25–30 ms. Also debounce the date pickers and precompute custom-range bounds. |
 | **v1.1.0** | Bilingual UI (English default + 中文, live switch). Token-accuracy fixes (Claude cache double-count; Codex cached/reasoning de-dup) with a one-time corrective rescan. Fix WAL-mode SQLite read-only open that silently dropped OpenCode/Hermes usage. Faster rescans (substring-gated parsing, cached date formatters, batched transactional upserts, single-pass base aggregates, debounced search). |
 | **v1.0.1** | Performance: eliminate dashboard frame drops (snapshot caching + single-pass + precomputed bounds); configure windows once; move refresh/persistence off the main thread. |

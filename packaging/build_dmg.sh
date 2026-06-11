@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="TokenScope"
 BUNDLE_ID="com.tokenscope.app"
-VERSION="1.1.1"
+VERSION="1.1.2"
 BUILD_DIR="$ROOT/dist"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -17,9 +17,10 @@ cd "$ROOT"
 rm -rf "$BUILD_DIR"
 mkdir -p "$MACOS" "$RESOURCES" "$DMG_STAGING"
 
-printf 'Building release executable...\n'
-swift build -c release --product TokenScope
-EXECUTABLE="$ROOT/.build/release/TokenScope"
+printf 'Building universal release executable (arm64 + x86_64)...\n'
+ARCH_FLAGS="--arch arm64 --arch x86_64"
+swift build -c release --product TokenScope $ARCH_FLAGS
+EXECUTABLE="$(swift build -c release --product TokenScope $ARCH_FLAGS --show-bin-path)/TokenScope"
 if [[ ! -x "$EXECUTABLE" ]]; then
   echo "Missing release executable: $EXECUTABLE" >&2
   exit 1

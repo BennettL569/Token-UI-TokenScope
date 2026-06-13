@@ -109,13 +109,31 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
     }
 
     public func setRefreshCursor(source: ToolKind, rawSource: String, position: Double) {
+        setRefreshCursor(source: source, rawSource: rawSource, position: position, model: nil)
+    }
+
+    public func refreshCursorModel(source: ToolKind, rawSource: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        let sql = "SELECT model FROM refresh_cursors WHERE source = ? AND raw_source = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(statement, 1, source.rawValue)
+        bind(statement, 2, rawSource)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return columnText(statement, 0)
+    }
+
+    public func setRefreshCursor(source: ToolKind, rawSource: String, position: Double, model: String?) {
         lock.lock()
         defer { lock.unlock() }
         let sql = """
-        INSERT INTO refresh_cursors (source, raw_source, position, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO refresh_cursors (source, raw_source, position, model, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(source, raw_source) DO UPDATE SET
             position=excluded.position,
+            model=excluded.model,
             updated_at=excluded.updated_at
         """
         var statement: OpaquePointer?
@@ -124,7 +142,8 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
         bind(statement, 1, source.rawValue)
         bind(statement, 2, rawSource)
         sqlite3_bind_double(statement, 3, position)
-        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        if let model { bind(statement, 4, model) } else { sqlite3_bind_null(statement, 4) }
+        sqlite3_bind_double(statement, 5, Date().timeIntervalSince1970)
         sqlite3_step(statement)
     }
 
@@ -264,10 +283,14 @@ public final class PersistentUsageRepository: UsageCursorStore, @unchecked Senda
             source TEXT NOT NULL,
             raw_source TEXT NOT NULL,
             position REAL NOT NULL,
+            model TEXT,
             updated_at REAL NOT NULL,
             PRIMARY KEY (source, raw_source)
         )
         """, nil, nil, nil)
+        // Migrate older databases whose refresh_cursors predate the `model` column. The ADD COLUMN
+        // errors harmlessly ("duplicate column") on databases that already have it; we ignore it.
+        sqlite3_exec(db, "ALTER TABLE refresh_cursors ADD COLUMN model TEXT", nil, nil, nil)
     }
 
     private static let upsertSQL = """

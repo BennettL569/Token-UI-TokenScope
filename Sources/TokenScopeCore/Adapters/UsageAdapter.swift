@@ -21,6 +21,19 @@ public protocol UsageAdapter: Sendable {
 public protocol UsageCursorStore: Sendable {
     func refreshCursor(source: ToolKind, rawSource: String) -> Double?
     func setRefreshCursor(source: ToolKind, rawSource: String, position: Double)
+    /// Per-file resume model for stateful JSONL adapters whose usage events don't name the model on
+    /// every line — Codex announces it once per turn in a `turn_context`. Persisting it lets an
+    /// incremental read that resumes mid-turn (past that `turn_context`) keep the real model instead
+    /// of falling back to "codex". Default no-ops, so stores/adapters that don't need it are unaffected.
+    func refreshCursorModel(source: ToolKind, rawSource: String) -> String?
+    func setRefreshCursor(source: ToolKind, rawSource: String, position: Double, model: String?)
+}
+
+public extension UsageCursorStore {
+    func refreshCursorModel(source: ToolKind, rawSource: String) -> String? { nil }
+    func setRefreshCursor(source: ToolKind, rawSource: String, position: Double, model: String?) {
+        setRefreshCursor(source: source, rawSource: rawSource, position: position)
+    }
 }
 
 public enum AdapterError: Error, LocalizedError {
@@ -77,7 +90,7 @@ public struct PlaceholderUsageAdapter: UsageAdapter {
     private func defaultModels(for tool: ToolKind) -> [String] {
         switch tool {
         case .claudeCode: return ["claude-sonnet-4.5", "claude-opus-4.1"]
-        case .codeX: return ["gpt-5.1-codex", "gpt-5-mini"]
+        case .codeX: return ["gpt-5.5", "gpt-5.4"]
         case .hermes: return ["gpt-5.5", "claude-sonnet-4"]
         case .openClaw: return ["openclaw-agent", "qwen3-coder"]
         case .openCode: return ["opencode", "claude-sonnet-4"]
@@ -104,7 +117,19 @@ public struct AdapterRegistry: Sendable {
                 tool: .codeX,
                 displayName: "Codex Local Sessions",
                 defaultGlobPatterns: ["~/.codex/sessions/**/*.jsonl", "~/.codex/archived_sessions/*.jsonl"],
-                parser: LocalUsageParser.parseCodexLine
+                statefulParser: { line, path, pricing, context in
+                    // Usage events are the hot path (gigabytes of logs), so try them first: a
+                    // `token_count` line short-circuits on its cheap substring gate. The model for
+                    // those events is announced earlier, once per turn, in a `turn_context` line —
+                    // remember it for the records that follow. A `turn_context` whose payload omits
+                    // the model is intentionally a no-op (keep the last known model) rather than a
+                    // reset to nil, which would revert those records to "codex".
+                    if let record = LocalUsageParser.parseCodexLine(line, filePath: path, pricing: pricing, model: context.model) {
+                        return record
+                    }
+                    if let model = LocalUsageParser.codexModel(fromLine: line) { context.model = model }
+                    return nil
+                }
             ),
             .hermes: HermesSQLiteUsageAdapter(),
             .openClaw: LocalJSONLUsageAdapter(

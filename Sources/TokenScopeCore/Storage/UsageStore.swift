@@ -75,7 +75,9 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// reaches historical data (incremental sync alone only re-reads newly appended log bytes).
     /// v2: Claude cache-creation double-count fixed; Codex cached/reasoning tokens de-duplicated.
     /// v3: record the cache-creation (write) portion of cache tokens separately.
-    static let parserVersion = 3
+    /// v4: Codex records carry the real model (e.g. gpt-5.5) read from the turn's `turn_context`
+    ///     event instead of a hardcoded "codex".
+    static let parserVersion = 4
     static let parserVersionDefaultsKey = "TokenScopeParserVersion"
 
     /// Localizes an inline English/Chinese pair for the current `language`.
@@ -173,11 +175,49 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     public func refreshOnLaunch() async {
         let storedParserVersion = UserDefaults.standard.integer(forKey: Self.parserVersionDefaultsKey)
         if storedParserVersion < Self.parserVersion {
-            UserDefaults.standard.set(Self.parserVersion, forKey: Self.parserVersionDefaultsKey)
+            // A parser-version bump can newly recognize models that didn't exist before (Codex
+            // gpt-5.5 / gpt-5.4 / gpt-5.4-mini, surfaced once the real model replaced the hardcoded
+            // "codex"). Seed their default pricing before the reparse so cost estimates are right;
+            // otherwise they fall through to the generic pricing fallback.
+            mergeMissingDefaultPricing(for: Self.modelsAddedInParserV4)
             await rebuildAllData()
+            // Record the version only after the seed + reparse complete, so an upgrade interrupted
+            // partway re-runs cleanly next launch instead of being silently skipped.
+            UserDefaults.standard.set(Self.parserVersion, forKey: Self.parserVersionDefaultsKey)
         } else if records.isEmpty {
             await refreshAll()
         }
+    }
+
+    /// `(tool, model)` pairs first recognized in parser version 4. Deliberately narrow: re-seeding
+    /// the whole default set would resurrect default rows a user deleted via the deletable-pricing
+    /// feature. These models only began appearing once the real Codex model replaced "codex", so
+    /// they cannot have existed — let alone been deleted — in a pre-v4 database.
+    public static let modelsAddedInParserV4: [(tool: ToolKind, model: String)] = [
+        (.codeX, "gpt-5.5"), (.codeX, "gpt-5.4"), (.codeX, "gpt-5.4-mini")
+    ]
+
+    /// Pure merge (exposed for testing): `existing` plus any `defaults` row matching an allowlisted
+    /// `(tool, model)` that is absent from `existing`. Model names compare case-insensitively, to
+    /// match the rest of the pricing system; user-edited rows are never overwritten.
+    public static func pricingByAddingMissingDefaults(_ allow: [(tool: ToolKind, model: String)], to existing: [ModelPricing], from defaults: [ModelPricing]) -> [ModelPricing] {
+        let key: (ToolKind, String) -> String = { "\($0.rawValue)\u{1}\($1.lowercased())" }
+        let known = Set(existing.map { key($0.tool, $0.model) })
+        let allowed = Set(allow.map { key($0.tool, $0.model) })
+        let missing = defaults.filter { allowed.contains(key($0.tool, $0.model)) && !known.contains(key($0.tool, $0.model)) }
+        return missing.isEmpty ? existing : existing + missing
+    }
+
+    /// Adds default pricing rows for the allowlisted models that the persisted table is missing.
+    /// The fresh-install seed in `init` only runs on an empty table, so this is how upgrading users
+    /// receive pricing for models added in a later release.
+    private func mergeMissingDefaultPricing(for allow: [(tool: ToolKind, model: String)]) {
+        let merged = Self.pricingByAddingMissingDefaults(allow, to: pricing, from: Self.defaultPricing())
+        guard merged.count != pricing.count else { return }
+        pricing = merged
+        let snapshot = pricing
+        let repo = repository
+        writeQueue.async { repo.savePricing(snapshot) }
     }
 
     @MainActor
@@ -447,6 +487,9 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         [
             ModelPricing(tool: .claudeCode, model: "claude-sonnet-4.5", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
             ModelPricing(tool: .claudeCode, model: "claude-opus-4.1", inputPerMillion: 15, outputPerMillion: 75, cachePerMillion: 1.5),
+            ModelPricing(tool: .codeX, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+            ModelPricing(tool: .codeX, model: "gpt-5.4", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+            ModelPricing(tool: .codeX, model: "gpt-5.4-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
             ModelPricing(tool: .codeX, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
             ModelPricing(tool: .codeX, model: "gpt-5-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
             ModelPricing(tool: .hermes, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),

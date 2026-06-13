@@ -201,6 +201,103 @@ struct TokenScopeTests {
         #expect(record?.cacheReadTokens == 7)
     }
 
+    @Test func codexParserExtractsModelFromTurnContext() {
+        // Codex usage (`token_count`) events name no model; it's announced in a preceding
+        // `turn_context` line. The adapter tracks it and threads it into the record — previously
+        // every Codex record was the hardcoded "codex".
+        let turnContext = """
+        {"timestamp":"2026-06-13T16:45:32.008Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5","effort":"high"}}
+        """
+        let tokenLine = """
+        {"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}
+        """
+        #expect(LocalUsageParser.codexModel(fromLine: turnContext) == "gpt-5.5")
+        #expect(LocalUsageParser.codexModel(fromLine: tokenLine) == nil)
+        #expect(LocalUsageParser.parseCodexLine(tokenLine, filePath: "/tmp/codex.jsonl", pricing: [], model: "gpt-5.5")?.model == "gpt-5.5")
+        #expect(LocalUsageParser.parseCodexLine(tokenLine, filePath: "/tmp/codex.jsonl", pricing: [])?.model == "codex")
+    }
+
+    @Test func codexAdapterThreadsModelAndSurvivesIncrementalResume() async throws {
+        // End-to-end through the real .codeX adapter: the model announced in a turn_context line must
+        // land on the following token_count records (stateful LineContext threading), and an
+        // incremental refresh that resumes past the turn_context must still stamp the real model
+        // (recovered from the persisted cursor) rather than regressing to "codex".
+        let turnContext = #"{"timestamp":"2026-06-13T16:45:32.000Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}"#
+        let tokenA = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
+        let tokenB = #"{"timestamp":"2026-06-13T16:46:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":25,"cached_input_tokens":5,"output_tokens":4,"total_tokens":29}}}}"#
+
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-codex-\(UUID().uuidString).jsonl")
+        let dbURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-codex-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: dbURL)
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+        }
+        let adapter = AdapterRegistry.defaultAdapters()[.codeX]!
+        let source = UsageSource(tool: .codeX, name: "Codex Test", accountId: "acc", apiKeyIdentity: "id", localLogPath: fileURL.path)
+        let repo = PersistentUsageRepository(dbURL: dbURL)
+
+        try (turnContext + "\n" + tokenA + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        let first = try await adapter.refresh(source: source, pricing: [], cursorStore: repo, fullScan: false)
+        #expect(first.count == 1)
+        #expect(first.first?.model == "gpt-5.5")
+
+        try (turnContext + "\n" + tokenA + "\n" + tokenB + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        let second = try await adapter.refresh(source: source, pricing: [], cursorStore: repo, fullScan: false)
+        #expect(second.count == 1)
+        #expect(second.first?.model == "gpt-5.5")
+
+        let full = try await adapter.refresh(source: source, pricing: [], cursorStore: nil, fullScan: true)
+        #expect(full.count == 2)
+        #expect(full.allSatisfy { $0.model == "gpt-5.5" })
+    }
+
+    @Test func pricingMergeSeedsNewModelsWithoutResurrectingDeleted() {
+        // Fix B: a parser-version bump seeds only the genuinely-new models. User-edited rows keep
+        // their values, a deleted default (not in the allowlist) is not resurrected, and the merge
+        // is idempotent and case-insensitive on the model name.
+        let userEdited = ModelPricing(tool: .codeX, model: "GPT-5.1-Codex", inputPerMillion: 99, outputPerMillion: 99, cachePerMillion: 9)
+        let existing = [userEdited]
+        let merged = UsageStore.pricingByAddingMissingDefaults(UsageStore.modelsAddedInParserV4, to: existing, from: UsageStore.defaultPricing())
+        #expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.5" })
+        #expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.4" })
+        #expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.4-mini" })
+        #expect(merged.first { $0.model == "GPT-5.1-Codex" }?.inputPerMillion == 99)
+        #expect(!merged.contains { $0.model.lowercased() == "gpt-5.1-codex" && $0.inputPerMillion != 99 })
+        #expect(!merged.contains { $0.model == "gpt-5-mini" })
+        let again = UsageStore.pricingByAddingMissingDefaults(UsageStore.modelsAddedInParserV4, to: merged, from: UsageStore.defaultPricing())
+        #expect(again.count == merged.count)
+    }
+
+    @Test func refreshCursorsMigratesModelColumnOnOldDatabase() throws {
+        // Fix A migration: a refresh_cursors table predating the `model` column gains it on open,
+        // pre-migration rows read back a nil model, and new model read/writes work.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-curmig-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        var writer: OpaquePointer?
+        #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
+        #expect(sqlite3_exec(writer, """
+        CREATE TABLE refresh_cursors (
+            source TEXT NOT NULL, raw_source TEXT NOT NULL, position REAL NOT NULL,
+            updated_at REAL NOT NULL, PRIMARY KEY (source, raw_source)
+        );
+        INSERT INTO refresh_cursors (source, raw_source, position, updated_at)
+        VALUES ('CodeX', '/tmp/x.jsonl', 10, 0);
+        """, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(writer)
+
+        let repo = PersistentUsageRepository(dbURL: url)
+        #expect(repo.refreshCursorModel(source: .codeX, rawSource: "/tmp/x.jsonl") == nil)
+        repo.setRefreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl", position: 20, model: "gpt-5.5")
+        #expect(repo.refreshCursorModel(source: .codeX, rawSource: "/tmp/x.jsonl") == "gpt-5.5")
+        #expect(repo.refreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl") == 20)
+    }
+
     @Test func aggregationTracksRequestCountAndCacheCreation() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let records = [

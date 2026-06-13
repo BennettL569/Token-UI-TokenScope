@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.3-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.4-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -341,6 +341,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.4** | Fix Codex usage being recorded under the model name `codex`: the real model (e.g. `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`) is now read from each turn's `turn_context` event and carried onto the token-count records — including across incremental syncs, where the model is persisted alongside the resume cursor. Adds default pricing for the new Codex models (seeded for upgrading users without overwriting edited or deleted prices) and a one-time corrective rescan on first launch. |
 | **v1.1.3** | New statistics: **cache creation** (write) tokens tracked separately from cache read, and **request counts** per range/tool — shown on the dashboard, the Usage detail table and the tool distribution. Adds an auto-migrated `cache_creation_tokens` column and a one-time backfill rescan on first launch. Also adds a **delete** action (with confirmation) to the Pricing screen so manually added prices can be removed. |
 | **v1.1.2** | Ship a **universal binary** (arm64 + x86_64) so the release runs on both Apple Silicon and Intel Macs. Update the install docs for macOS 15+/26 Gatekeeper (System Settings → Open Anyway / `xattr`). No code changes. |
 | **v1.1.1** | Fix dropped frames when changing the time range or custom dates: the dashboard snapshot is recomputed off the main thread (coalesced), so a filter change costs ~0 ms on the main thread instead of ~25–30 ms. Also debounce the date pickers and precompute custom-range bounds. |

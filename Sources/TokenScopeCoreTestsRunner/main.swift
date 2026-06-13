@@ -19,6 +19,10 @@ struct TokenScopeCoreTestsRunner {
         try claudeParserReadsUsageLine()
         try claudeParserDoesNotDoubleCountCacheCreation()
         try codexParserReadsTokenCountLine()
+        try codexParserExtractsModelFromTurnContext()
+        try await codexAdapterThreadsModelAndSurvivesIncrementalResume()
+        try pricingMergeSeedsNewModelsWithoutResurrectingDeleted()
+        try await refreshCursorsMigratesModelColumnOnOldDatabase()
         try openClawParserReadsUsageLine()
         try hermesParserIncludesReasoningTokens()
         try await hermesSQLiteAdapterUsesLatestMessageTimestamp()
@@ -31,7 +35,7 @@ struct TokenScopeCoreTestsRunner {
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 26 checks passed")
+        print("TokenScopeCoreTestsRunner: 30 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -181,6 +185,110 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.totalTokens == 20, "codex total must equal input_tokens + output_tokens")
         try expect(record?.cacheCreationTokens == 0, "codex cached tokens are reads, not creation")
         try expect(record?.cacheReadTokens == 7, "codex cache read mismatch")
+    }
+
+    static func codexParserExtractsModelFromTurnContext() throws {
+        // Codex usage (`token_count`) events name no model; the active model is announced in a
+        // preceding `turn_context` line. The adapter tracks it and threads it into the record —
+        // previously every Codex record was the hardcoded "codex".
+        let turnContext = """
+        {"timestamp":"2026-06-13T16:45:32.008Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5","effort":"high"}}
+        """
+        let tokenLine = """
+        {"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}
+        """
+        try expect(LocalUsageParser.codexModel(fromLine: turnContext) == "gpt-5.5", "model not extracted from turn_context")
+        try expect(LocalUsageParser.codexModel(fromLine: tokenLine) == nil, "token_count line must not be treated as turn_context")
+        try expect(LocalUsageParser.parseCodexLine(tokenLine, filePath: "/tmp/codex.jsonl", pricing: [], model: "gpt-5.5")?.model == "gpt-5.5", "threaded model did not land on record")
+        try expect(LocalUsageParser.parseCodexLine(tokenLine, filePath: "/tmp/codex.jsonl", pricing: [])?.model == "codex", "missing model must fall back to codex")
+    }
+
+    static func codexAdapterThreadsModelAndSurvivesIncrementalResume() async throws {
+        // End-to-end through the real .codeX adapter: the model is announced once in a turn_context
+        // line and must land on the token_count records that follow it (the stateful LineContext
+        // threading). Critically, an incremental refresh that resumes AFTER the turn_context — but
+        // before later token_counts of the same turn are appended — must still stamp the real model
+        // (recovered from the persisted cursor), not regress to "codex".
+        let turnContext = #"{"timestamp":"2026-06-13T16:45:32.000Z","type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}"#
+        let tokenA = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
+        let tokenB = #"{"timestamp":"2026-06-13T16:46:10.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":25,"cached_input_tokens":5,"output_tokens":4,"total_tokens":29}}}}"#
+
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-codex-\(UUID().uuidString).jsonl")
+        let dbURL = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-codex-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: dbURL)
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+        }
+        let adapter = AdapterRegistry.defaultAdapters()[.codeX]!
+        let source = UsageSource(tool: .codeX, name: "Codex Test", accountId: "acc", apiKeyIdentity: "id", localLogPath: fileURL.path)
+        let repo = PersistentUsageRepository(dbURL: dbURL)
+
+        // First incremental pass: turn_context + one token_count.
+        try (turnContext + "\n" + tokenA + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        let first = try await adapter.refresh(source: source, pricing: [], cursorStore: repo, fullScan: false)
+        try expect(first.count == 1, "codex adapter should read the first token_count")
+        try expect(first[0].model == "gpt-5.5", "codex adapter did not thread turn_context model onto the record")
+
+        // Append a later token_count of the same turn (no new turn_context) and resume incrementally.
+        try (turnContext + "\n" + tokenA + "\n" + tokenB + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        let second = try await adapter.refresh(source: source, pricing: [], cursorStore: repo, fullScan: false)
+        try expect(second.count == 1, "incremental resume should read only the appended token_count")
+        try expect(second[0].model == "gpt-5.5", "incremental resume lost the model and fell back to codex")
+
+        // A full scan with no cursor store recovers the model purely from the inline turn_context.
+        let full = try await adapter.refresh(source: source, pricing: [], cursorStore: nil, fullScan: true)
+        try expect(full.count == 2, "full scan should read both token_counts")
+        try expect(full.allSatisfy { $0.model == "gpt-5.5" }, "full scan records should all carry the real model")
+    }
+
+    static func pricingMergeSeedsNewModelsWithoutResurrectingDeleted() throws {
+        // Fix B: on a parser-version bump only the genuinely-new models are seeded. User-edited rows
+        // keep their values, and a default the user deleted (not in the new-models allowlist) is NOT
+        // resurrected. Lookups are case-insensitive on the model name.
+        let userEdited = ModelPricing(tool: .codeX, model: "GPT-5.1-Codex", inputPerMillion: 99, outputPerMillion: 99, cachePerMillion: 9)
+        // Existing table has the user-edited row but is missing the new gpt-5.4 models AND a
+        // previously-deleted default (gpt-5-mini).
+        let existing = [userEdited]
+        let merged = UsageStore.pricingByAddingMissingDefaults(UsageStore.modelsAddedInParserV4, to: existing, from: UsageStore.defaultPricing())
+        try expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.5" }, "merge did not add new gpt-5.5")
+        try expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.4" }, "merge did not add new gpt-5.4")
+        try expect(merged.contains { $0.tool == .codeX && $0.model == "gpt-5.4-mini" }, "merge did not add new gpt-5.4-mini")
+        try expect(merged.first { $0.model == "GPT-5.1-Codex" }?.inputPerMillion == 99, "merge overwrote a user-edited row")
+        try expect(!merged.contains { $0.model.lowercased() == "gpt-5.1-codex" && $0.inputPerMillion != 99 }, "merge resurrected the case-variant default over the user edit")
+        try expect(!merged.contains { $0.model == "gpt-5-mini" }, "merge resurrected a deleted default not in the allowlist")
+        // Idempotent: re-running adds nothing.
+        let again = UsageStore.pricingByAddingMissingDefaults(UsageStore.modelsAddedInParserV4, to: merged, from: UsageStore.defaultPricing())
+        try expect(again.count == merged.count, "merge is not idempotent")
+    }
+
+    static func refreshCursorsMigratesModelColumnOnOldDatabase() async throws {
+        // Fix A migration: a pre-existing refresh_cursors table without the `model` column must gain
+        // it on open (ALTER TABLE) without error, with pre-migration rows reading back a nil model
+        // and new reads/writes of the model working.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-curmig-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        do {
+            let db = try SQLiteTestDB(path: url.path)
+            try db.exec("""
+            CREATE TABLE refresh_cursors (
+                source TEXT NOT NULL, raw_source TEXT NOT NULL, position REAL NOT NULL,
+                updated_at REAL NOT NULL, PRIMARY KEY (source, raw_source)
+            );
+            INSERT INTO refresh_cursors (source, raw_source, position, updated_at)
+            VALUES ('CodeX', '/tmp/x.jsonl', 10, 0);
+            """)
+        } // writer closed
+        let repo = PersistentUsageRepository(dbURL: url)
+        try expect(repo.refreshCursorModel(source: .codeX, rawSource: "/tmp/x.jsonl") == nil, "pre-migration row should have a nil model")
+        repo.setRefreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl", position: 20, model: "gpt-5.5")
+        try expect(repo.refreshCursorModel(source: .codeX, rawSource: "/tmp/x.jsonl") == "gpt-5.5", "model not persisted after migration")
+        try expect(repo.refreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl") == 20, "position not preserved across model write")
     }
 
     static func openClawParserReadsUsageLine() throws {

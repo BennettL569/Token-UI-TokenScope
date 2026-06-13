@@ -31,7 +31,22 @@ public enum LocalUsageParser {
         return record
     }
 
-    public static func parseCodexLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+    /// Codex usage events carry no model name — the active model is announced once per turn in a
+    /// preceding `turn_context` event. The Codex adapter tracks the most recent one and threads it
+    /// in via `model`; `nil` falls back to `"codex"`. An incremental read that resumes mid-turn
+    /// (past this turn's `turn_context`) recovers the model from the persisted cursor instead, so
+    /// the fallback is reached only when no model has ever been seen for the file. Returns the model
+    /// for a `turn_context` line, else `nil`, so the adapter can use it as both a model-state
+    /// updater and a cheap "is this a turn_context" gate.
+    public static func codexModel(fromLine line: String) -> String? {
+        guard line.contains("turn_context") else { return nil }
+        guard let object = parseJSONObject(line),
+              string(object["type"]) == "turn_context",
+              let payload = object["payload"] as? [String: Any] else { return nil }
+        return string(payload["model"])
+    }
+
+    public static func parseCodexLine(_ line: String, filePath: String, pricing: [ModelPricing], model: String? = nil) -> UsageRecord? {
         // Cheap substring gate: only `token_count` events carry usage, and they are a small
         // fraction of the (very large) Codex rollout logs. Skipping the JSON parse for every
         // other line is the single biggest win when rescanning gigabytes of sessions.
@@ -54,8 +69,8 @@ public enum LocalUsageParser {
         let output = int(usage["output_tokens"])
         guard input + output + cache > 0 else { return nil }
         let timestamp = parseDate(string(object["timestamp"])) ?? Date()
-        let model = "codex"
-        var record = UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: "\(filePath)#\(timestamp.timeIntervalSince1970)#\(input)#\(output)#\(cache)", rawSource: filePath)
+        let resolvedModel = model ?? "codex"
+        var record = UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: resolvedModel, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: "\(filePath)#\(timestamp.timeIntervalSince1970)#\(input)#\(output)#\(cache)", rawSource: filePath)
         record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
         return record
     }
@@ -215,19 +230,38 @@ public enum LocalUsageParser {
 }
 
 public struct LocalJSONLUsageAdapter: UsageAdapter {
+    /// Per-file state threaded through the parser so formats whose usage lines don't carry every
+    /// field can recover it from an earlier line. Codex is the motivating case: a `token_count`
+    /// event names no model — it's announced once per turn in a preceding `turn_context` line —
+    /// so the adapter remembers the latest `model` here. Reset to empty at the start of each file.
+    public struct LineContext: Sendable {
+        public var model: String?
+        public init() {}
+    }
+    public typealias StatefulParser = @Sendable (_ line: String, _ filePath: String, _ pricing: [ModelPricing], _ context: inout LineContext) -> UsageRecord?
+
     public let id: String
     public let tool: ToolKind
     public let displayName: String
     public let capabilities: AdapterCapabilities = [.supportsLocalLogs, .supportsImport, .supportsCostEstimation]
     private let defaultGlobPatterns: [String]
-    private let parser: @Sendable (String, String, [ModelPricing]) -> UsageRecord?
+    private let parser: StatefulParser
 
+    /// Stateless parser (one line → at most one record); for formats that name everything on each
+    /// usage line, e.g. Claude and OpenClaw.
     public init(tool: ToolKind, displayName: String, defaultGlobPatterns: [String], parser: @escaping @Sendable (String, String, [ModelPricing]) -> UsageRecord?) {
+        self.init(tool: tool, displayName: displayName, defaultGlobPatterns: defaultGlobPatterns) { line, path, pricing, _ in
+            parser(line, path, pricing)
+        }
+    }
+
+    /// Stateful parser that may read and update per-file `LineContext` (e.g. Codex model tracking).
+    public init(tool: ToolKind, displayName: String, defaultGlobPatterns: [String], statefulParser: @escaping StatefulParser) {
         self.id = tool.rawValue.lowercased() + "-local-jsonl"
         self.tool = tool
         self.displayName = displayName
         self.defaultGlobPatterns = defaultGlobPatterns
-        self.parser = parser
+        self.parser = statefulParser
     }
 
     public func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore? = nil, fullScan: Bool = false) async throws -> [UsageRecord] {
@@ -243,10 +277,15 @@ public struct LocalJSONLUsageAdapter: UsageAdapter {
             let startOffset = max(0, min(rawCursor, fileSize))
             if startOffset > 0 { skipBytes(startOffset, in: stream) }
             let reader = LineReader(stream: stream)
+            var context = LineContext()
+            // Resume the model a previous pass established, so an incremental read that starts
+            // mid-turn (past this turn's `turn_context`) keeps the real model instead of falling
+            // back to "codex". Harmless for stateless formats — their context.model stays nil.
+            if startOffset > 0 { context.model = cursorStore?.refreshCursorModel(source: tool, rawSource: path) }
             while let line = reader.nextLine() {
-                if let record = parser(line, path, pricing) { records.append(record) }
+                if let record = parser(line, path, pricing, &context) { records.append(record) }
             }
-            cursorStore?.setRefreshCursor(source: tool, rawSource: path, position: Double(fileSize))
+            cursorStore?.setRefreshCursor(source: tool, rawSource: path, position: Double(fileSize), model: context.model)
         }
         return records
     }

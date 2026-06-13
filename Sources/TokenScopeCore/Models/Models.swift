@@ -8,6 +8,17 @@ public enum ToolKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case openCode = "OpenCode"
 
     public var id: String { rawValue }
+
+    /// Whether this tool's source data reports cache *creation* (write) tokens. Codex follows
+    /// OpenAI accounting, which only reports `cached_input_tokens` (cache reads) and has no
+    /// cache-write concept, so its "cache creation" is always 0 — the UI uses this to explain that
+    /// 0 rather than letting it look like a bug. Every other tracked tool can report cache writes.
+    public var reportsCacheCreation: Bool {
+        switch self {
+        case .codeX: return false
+        case .claudeCode, .hermes, .openClaw, .openCode: return true
+        }
+    }
 }
 
 public enum TimeRange: String, Codable, CaseIterable, Identifiable, Sendable {

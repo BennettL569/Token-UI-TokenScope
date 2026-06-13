@@ -270,6 +270,16 @@ struct TokenScopeTests {
         #expect(again.count == merged.count)
     }
 
+    @Test func toolKindReportsCacheCreationOnlyForWritingTools() {
+        // Codex follows OpenAI accounting (cache reads only, no cache-write tokens), so its cache
+        // creation is structurally 0; the dashboard uses this flag to explain that 0.
+        #expect(ToolKind.codeX.reportsCacheCreation == false)
+        #expect(ToolKind.claudeCode.reportsCacheCreation)
+        #expect(ToolKind.hermes.reportsCacheCreation)
+        #expect(ToolKind.openClaw.reportsCacheCreation)
+        #expect(ToolKind.openCode.reportsCacheCreation)
+    }
+
     @Test func refreshCursorsMigratesModelColumnOnOldDatabase() throws {
         // Fix A migration: a refresh_cursors table predating the `model` column gains it on open,
         // pre-migration rows read back a nil model, and new model read/writes work.

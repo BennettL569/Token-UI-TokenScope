@@ -101,14 +101,23 @@ struct MetricCard: View {
     let value: String
     let subtitle: String
     let accent: Color
+    var hint: String? = nil
 
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 8) {
-                Text(title.uppercased())
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(theme.textMuted)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(title.uppercased())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(theme.textMuted)
+                        .lineLimit(1)
+                    if hint != nil {
+                        Image(systemName: "info.circle")
+                            .font(.caption2)
+                            .foregroundStyle(theme.textMuted)
+                    }
+                }
+                .help(hint ?? "")
                 Text(value)
                     .font(.system(size: 23, weight: .bold, design: .rounded))
                     .foregroundStyle(accent)

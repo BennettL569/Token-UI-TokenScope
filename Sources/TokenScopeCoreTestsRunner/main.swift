@@ -22,6 +22,7 @@ struct TokenScopeCoreTestsRunner {
         try codexParserExtractsModelFromTurnContext()
         try await codexAdapterThreadsModelAndSurvivesIncrementalResume()
         try pricingMergeSeedsNewModelsWithoutResurrectingDeleted()
+        try toolKindReportsCacheCreationOnlyForWritingTools()
         try await refreshCursorsMigratesModelColumnOnOldDatabase()
         try openClawParserReadsUsageLine()
         try hermesParserIncludesReasoningTokens()
@@ -35,7 +36,7 @@ struct TokenScopeCoreTestsRunner {
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 30 checks passed")
+        print("TokenScopeCoreTestsRunner: 31 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -261,6 +262,16 @@ struct TokenScopeCoreTestsRunner {
         // Idempotent: re-running adds nothing.
         let again = UsageStore.pricingByAddingMissingDefaults(UsageStore.modelsAddedInParserV4, to: merged, from: UsageStore.defaultPricing())
         try expect(again.count == merged.count, "merge is not idempotent")
+    }
+
+    static func toolKindReportsCacheCreationOnlyForWritingTools() throws {
+        // Codex follows OpenAI accounting (cache reads only, no cache-write tokens), so its cache
+        // creation is structurally 0; the dashboard uses this flag to explain that 0. Every other
+        // tool can report cache writes.
+        try expect(ToolKind.codeX.reportsCacheCreation == false, "Codex must not be marked as reporting cache creation")
+        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode] {
+            try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
+        }
     }
 
     static func refreshCursorsMigratesModelColumnOnOldDatabase() async throws {

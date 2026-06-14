@@ -280,6 +280,26 @@ struct TokenScopeTests {
         #expect(ToolKind.openCode.reportsCacheCreation)
     }
 
+    @Test func exportRedactsRawSourceWhenIdentifiersExcluded() throws {
+        // A redacted export must not leak the local path/username in rawSource or the account id.
+        let record = UsageRecord(source: .claudeCode, accountId: "acct-secret", apiKeyHash: "key-secret", model: "m", timestamp: Date(timeIntervalSince1970: 1_700_000_000), inputTokens: 1, outputTokens: 1, cacheTokens: 0, estimatedCost: 0, rawSource: "/Users/somebody/.claude/projects/secret/x.jsonl")
+        // JSONEncoder escapes "/" as "\/", so match on slash-free substrings.
+        let redacted = try ExportService.export(records: [record], format: .json, includeIdentifiers: false)
+        #expect(!redacted.contains("somebody"))
+        #expect(!redacted.contains("acct-secret"))
+        #expect(redacted.contains("redacted"))
+        let full = try ExportService.export(records: [record], format: .json, includeIdentifiers: true)
+        #expect(full.contains("somebody"))
+    }
+
+    @Test func codexParserSkipsCumulativeOnlyTokenCount() {
+        // Only the per-event delta is counted; a cumulative-only event is skipped (avoids over-count).
+        let totalOnly = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9999,"output_tokens":8888,"total_tokens":18887}}}}"#
+        #expect(LocalUsageParser.parseCodexLine(totalOnly, filePath: "/tmp/c.jsonl", pricing: []) == nil)
+        let withLast = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
+        #expect(LocalUsageParser.parseCodexLine(withLast, filePath: "/tmp/c.jsonl", pricing: []) != nil)
+    }
+
     @Test func updateServiceComparesVersionsNumerically() {
         // "1.1.10" must beat "1.1.9" (plain string compare would not); v-prefix tolerated.
         #expect(UpdateService.compare("1.1.10", "1.1.9") == .orderedDescending)

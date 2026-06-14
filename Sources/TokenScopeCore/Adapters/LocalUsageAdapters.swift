@@ -56,8 +56,11 @@ public enum LocalUsageParser {
               let payload = object["payload"] as? [String: Any],
               string(payload["type"]) == "token_count",
               let info = payload["info"] as? [String: Any] else { return nil }
-        let usage = (info["last_token_usage"] as? [String: Any]) ?? (info["total_token_usage"] as? [String: Any])
-        guard let usage else { return nil }
+        // Use the per-event delta only. `total_token_usage` is the session-running cumulative
+        // counter; treating it as one request's usage — and re-adding it on every later event —
+        // would inflate Codex totals by orders of magnitude, so skip events that lack a per-event
+        // `last_token_usage` rather than falling back to the cumulative total.
+        guard let usage = info["last_token_usage"] as? [String: Any] else { return nil }
         // Codex follows OpenAI accounting where `total_tokens == input_tokens + output_tokens`:
         //  • `cached_input_tokens` is a SUBSET of `input_tokens` (cache reads), and
         //  • `reasoning_output_tokens` is a SUBSET of `output_tokens`.
@@ -306,7 +309,7 @@ public struct LocalJSONLUsageAdapter: UsageAdapter {
 public enum FileDiscovery {
     public static func expand(paths: [String]) -> [String] {
         var results: [String] = []
-        let maxFilesPerPattern = 2_000
+        let maxFilesPerPattern = 10_000
         for raw in paths {
             let expanded = NSString(string: raw).expandingTildeInPath
             if let globbed = expandGlob(expanded, limit: maxFilesPerPattern) {
@@ -343,21 +346,37 @@ public enum FileDiscovery {
     private static func enumerateFiles(root: String, extensions: [String] = [".jsonl", ".json", ".db", ".sqlite", ".sqlite3"], limit: Int, recursive: Bool = true) -> [String] {
         guard FileManager.default.fileExists(atPath: root) else { return [] }
         var results: [String] = []
+        // Collect past `limit` (bounded against a pathological tree) so that, when truncating, we
+        // can keep the newest files instead of whichever the enumerator happened to yield first.
+        let hardCap = max(limit * 4, 40_000)
         if recursive {
             guard let enumerator = FileManager.default.enumerator(atPath: root) else { return [] }
             for case let file as String in enumerator {
                 if extensions.contains(where: { file.hasSuffix($0) }) {
                     results.append((root as NSString).appendingPathComponent(file))
-                    if results.count >= limit { break }
+                    if results.count >= hardCap { break }
                 }
             }
         } else if let files = try? FileManager.default.contentsOfDirectory(atPath: root) {
             for file in files where extensions.contains(where: { file.hasSuffix($0) }) {
                 results.append((root as NSString).appendingPathComponent(file))
-                if results.count >= limit { break }
+                if results.count >= hardCap { break }
             }
         }
+        if results.count > limit {
+            // Keep the most recently modified files; truncating in enumerator order could silently
+            // drop the newest sessions and under-count recent usage.
+            results = results
+                .map { (path: $0, modified: modificationDate($0)) }
+                .sorted { $0.modified > $1.modified }
+                .prefix(limit)
+                .map(\.path)
+        }
         return results.sorted()
+    }
+
+    private static func modificationDate(_ path: String) -> Date {
+        ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
     }
 }
 

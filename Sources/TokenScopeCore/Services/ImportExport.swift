@@ -68,7 +68,10 @@ private struct ExportRow: Codable {
         self.cacheTokens = record.cacheTokens
         self.totalTokens = record.totalTokens
         self.estimatedCost = record.estimatedCost
-        self.rawSource = record.rawSource
+        // rawSource holds the full local file path (e.g. /Users/<name>/.claude/projects/…), so it
+        // is an identifier: only include it when identifiers are explicitly opted in, otherwise a
+        // "redacted" export would still ship the username and filesystem layout.
+        self.rawSource = includeIdentifiers ? record.rawSource : "redacted"
     }
 }
 

@@ -5,40 +5,54 @@ import TokenScopeCore
 @main
 struct TokenScopeCoreTestsRunner {
     static func main() async throws {
-        try pricingEngineCalculatesInputOutputAndCacheCost()
-        try dedupeUsesRequestIdWhenAvailable()
-        try dedupeFallbackIsStableForSamePayload()
-        try maskingDoesNotExposeFullAPIKey()
-        try aggregationFiltersToday()
-        try aggregationFiltersCustomDateRange()
-        try aggregationCustomRangeIncludesEndDayButNotNextDay()
-        try aggregationTracksRequestCountAndCacheCreation()
-        try budgetAlertLevels()
-        try exportRedactsIdentifiersByDefault()
-        try await repositoryDeduplicatesRecords()
-        try claudeParserReadsUsageLine()
-        try claudeParserDoesNotDoubleCountCacheCreation()
-        try codexParserReadsTokenCountLine()
-        try codexParserExtractsModelFromTurnContext()
-        try await codexAdapterThreadsModelAndSurvivesIncrementalResume()
-        try pricingMergeSeedsNewModelsWithoutResurrectingDeleted()
-        try toolKindReportsCacheCreationOnlyForWritingTools()
-        try updateServiceComparesVersionsNumerically()
-        try updateServiceParsesGitHubRelease()
-        try await refreshCursorsMigratesModelColumnOnOldDatabase()
-        try openClawParserReadsUsageLine()
-        try hermesParserIncludesReasoningTokens()
-        try await hermesSQLiteAdapterUsesLatestMessageTimestamp()
-        try await sqliteAdapterReadsWalModeDatabaseAfterWriterClosed()
-        try openCodeParserReadsMessageRow()
-        try openCodeParserReadsNestedTokensCacheShape()
-        try await persistentRepositoryKeepsHistoricalRecords()
-        try pricingPersistsInSQLite()
-        try pricingCanBeDeleted()
-        try budgetsPersistInSQLite()
-        try budgetProgressCanUseTokenOrCostMode()
-        try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 33 checks passed")
+        // Single source of truth for the check list — the printed count is derived from it, so it
+        // can never drift, and a failure reports which check broke.
+        let checks: [(name: String, run: () async throws -> Void)] = [
+            ("pricingEngineCalculatesInputOutputAndCacheCost", { try pricingEngineCalculatesInputOutputAndCacheCost() }),
+            ("dedupeUsesRequestIdWhenAvailable", { try dedupeUsesRequestIdWhenAvailable() }),
+            ("dedupeFallbackIsStableForSamePayload", { try dedupeFallbackIsStableForSamePayload() }),
+            ("maskingDoesNotExposeFullAPIKey", { try maskingDoesNotExposeFullAPIKey() }),
+            ("aggregationFiltersToday", { try aggregationFiltersToday() }),
+            ("aggregationFiltersCustomDateRange", { try aggregationFiltersCustomDateRange() }),
+            ("aggregationCustomRangeIncludesEndDayButNotNextDay", { try aggregationCustomRangeIncludesEndDayButNotNextDay() }),
+            ("aggregationTracksRequestCountAndCacheCreation", { try aggregationTracksRequestCountAndCacheCreation() }),
+            ("budgetAlertLevels", { try budgetAlertLevels() }),
+            ("exportRedactsIdentifiersByDefault", { try exportRedactsIdentifiersByDefault() }),
+            ("exportRedactsRawSourceWhenIdentifiersExcluded", { try exportRedactsRawSourceWhenIdentifiersExcluded() }),
+            ("repositoryDeduplicatesRecords", { try await repositoryDeduplicatesRecords() }),
+            ("claudeParserReadsUsageLine", { try claudeParserReadsUsageLine() }),
+            ("claudeParserDoesNotDoubleCountCacheCreation", { try claudeParserDoesNotDoubleCountCacheCreation() }),
+            ("codexParserReadsTokenCountLine", { try codexParserReadsTokenCountLine() }),
+            ("codexParserSkipsCumulativeOnlyTokenCount", { try codexParserSkipsCumulativeOnlyTokenCount() }),
+            ("codexParserExtractsModelFromTurnContext", { try codexParserExtractsModelFromTurnContext() }),
+            ("codexAdapterThreadsModelAndSurvivesIncrementalResume", { try await codexAdapterThreadsModelAndSurvivesIncrementalResume() }),
+            ("pricingMergeSeedsNewModelsWithoutResurrectingDeleted", { try pricingMergeSeedsNewModelsWithoutResurrectingDeleted() }),
+            ("toolKindReportsCacheCreationOnlyForWritingTools", { try toolKindReportsCacheCreationOnlyForWritingTools() }),
+            ("updateServiceComparesVersionsNumerically", { try updateServiceComparesVersionsNumerically() }),
+            ("updateServiceParsesGitHubRelease", { try updateServiceParsesGitHubRelease() }),
+            ("refreshCursorsMigratesModelColumnOnOldDatabase", { try await refreshCursorsMigratesModelColumnOnOldDatabase() }),
+            ("openClawParserReadsUsageLine", { try openClawParserReadsUsageLine() }),
+            ("hermesParserIncludesReasoningTokens", { try hermesParserIncludesReasoningTokens() }),
+            ("hermesSQLiteAdapterUsesLatestMessageTimestamp", { try await hermesSQLiteAdapterUsesLatestMessageTimestamp() }),
+            ("sqliteAdapterReadsWalModeDatabaseAfterWriterClosed", { try await sqliteAdapterReadsWalModeDatabaseAfterWriterClosed() }),
+            ("openCodeParserReadsMessageRow", { try openCodeParserReadsMessageRow() }),
+            ("openCodeParserReadsNestedTokensCacheShape", { try openCodeParserReadsNestedTokensCacheShape() }),
+            ("persistentRepositoryKeepsHistoricalRecords", { try await persistentRepositoryKeepsHistoricalRecords() }),
+            ("pricingPersistsInSQLite", { try pricingPersistsInSQLite() }),
+            ("pricingCanBeDeleted", { try pricingCanBeDeleted() }),
+            ("budgetsPersistInSQLite", { try budgetsPersistInSQLite() }),
+            ("budgetProgressCanUseTokenOrCostMode", { try budgetProgressCanUseTokenOrCostMode() }),
+            ("dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates", { try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates() }),
+        ]
+        for check in checks {
+            do {
+                try await check.run()
+            } catch {
+                print("TokenScopeCoreTestsRunner: FAILED at \(check.name): \(error)")
+                throw error
+            }
+        }
+        print("TokenScopeCoreTestsRunner: \(checks.count) checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -330,6 +344,29 @@ struct TokenScopeCoreTestsRunner {
         repo.setRefreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl", position: 20, model: "gpt-5.5")
         try expect(repo.refreshCursorModel(source: .codeX, rawSource: "/tmp/x.jsonl") == "gpt-5.5", "model not persisted after migration")
         try expect(repo.refreshCursor(source: .codeX, rawSource: "/tmp/x.jsonl") == 20, "position not preserved across model write")
+    }
+
+    static func exportRedactsRawSourceWhenIdentifiersExcluded() throws {
+        // A "redacted" export (identifiers off) must not leak the local file path / username that
+        // rawSource carries, nor the account id; including identifiers keeps the real rawSource.
+        let record = UsageRecord(source: .claudeCode, accountId: "acct-secret", apiKeyHash: "key-secret", model: "m", timestamp: Date(timeIntervalSince1970: 1_700_000_000), inputTokens: 1, outputTokens: 1, cacheTokens: 0, estimatedCost: 0, rawSource: "/Users/somebody/.claude/projects/secret/x.jsonl")
+        // Match on slash-free substrings: JSONEncoder escapes "/" as "\/", so checking the literal
+        // path would be brittle; the username and account id are unambiguous either way.
+        let redacted = try ExportService.export(records: [record], format: .json, includeIdentifiers: false)
+        try expect(!redacted.contains("somebody"), "redacted export leaked the local path in rawSource")
+        try expect(!redacted.contains("acct-secret"), "redacted export leaked the account id")
+        try expect(redacted.contains("redacted"), "redacted export should mark withheld fields")
+        let full = try ExportService.export(records: [record], format: .json, includeIdentifiers: true)
+        try expect(full.contains("somebody"), "identifier-included export should keep rawSource")
+    }
+
+    static func codexParserSkipsCumulativeOnlyTokenCount() throws {
+        // An event carrying only the session-cumulative total must be skipped, not counted as one
+        // request's usage (which would over-count); a per-event last_token_usage is still counted.
+        let totalOnly = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9999,"output_tokens":8888,"total_tokens":18887}}}}"#
+        try expect(LocalUsageParser.parseCodexLine(totalOnly, filePath: "/tmp/c.jsonl", pricing: []) == nil, "codex should skip a cumulative-only token_count")
+        let withLast = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
+        try expect(LocalUsageParser.parseCodexLine(withLast, filePath: "/tmp/c.jsonl", pricing: []) != nil, "codex should count a per-event last_token_usage")
     }
 
     static func openClawParserReadsUsageLine() throws {

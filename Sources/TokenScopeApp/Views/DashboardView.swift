@@ -30,6 +30,25 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HeaderBar(title: "TokenScope", subtitle: lang.select("AI Tokens & Cost Command Center", "AI Tokens 与成本指挥中心"))
                 RangeFilterBar()
+                if let error = store.errorMessage, !error.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(lang.select("Some sources failed to sync — totals may be incomplete.", "部分数据源同步失败，统计可能不完整。"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(Color.scopeTextMuted)
+                                .textSelection(.enabled)
+                        }
+                        Spacer()
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
                 metrics
                 HStack(alignment: .top, spacing: 16) {
                     TrendChartView(buckets: store.dashboardSnapshot.trend)

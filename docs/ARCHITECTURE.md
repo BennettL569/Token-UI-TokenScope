@@ -1,15 +1,16 @@
 # TokenScope Product & Technical Architecture
 
+> ⚠️ **Historical design note.** This document captures the original prototype design. Several
+> details are now out of date — storage is **SQLite (WAL)**, not in-memory; there are **5 tools**
+> (ClaudeCode, CodeX, Hermes, OpenClaw, **OpenCode**); adapters read **real** local logs/DBs (no
+> mocks); and the in-app updater exists. For the current architecture, treat the **README** as the
+> canonical reference. The conceptual sections below (data models, cost, budgets, widgets) still
+> hold.
+
 ## Repository Analysis
 
-The selected workspace was empty at the start of implementation:
-
-- No existing Xcode project
-- No Swift Package manifest
-- No source files
-- No tests
-
-Because there is no existing code style to preserve, TokenScope is implemented as a modular Swift Package macOS app prototype that can be opened in Xcode or built with SwiftPM. The implementation avoids unrelated scaffolding and keeps production logic testable outside the SwiftUI shell.
+TokenScope is a modular Swift Package macOS app that can be opened in Xcode or built with SwiftPM.
+The implementation keeps production logic testable outside the SwiftUI shell.
 
 ## Product Scope
 
@@ -19,6 +20,7 @@ TokenScope is a local-first macOS native dashboard for tracking API token usage 
 - CodeX
 - Hermes
 - OpenClaw
+- OpenCode
 
 Core surfaces:
 
@@ -46,7 +48,7 @@ flowchart TD
   Keychain[KeychainService]
   Widget[WidgetKit Extension]
   Shared[App Group WidgetSummary JSON]
-  SQLite[(SQLite planned storage)]
+  SQLite[(SQLite WAL storage)]
 
   App --> Store
   Store --> Adapters
@@ -59,7 +61,7 @@ flowchart TD
   Store --> SQLite
 ```
 
-The prototype currently uses an in-memory repository with deterministic mock records so build/test/UI validation can run without external credentials. The storage boundary is explicit and ready to swap for SQLite.
+Records, pricing, budgets and refresh cursors persist in **SQLite (WAL)** via `PersistentUsageRepository`; an in-memory repository remains only for tests. (The original prototype used an in-memory store with mock records — that has been superseded.)
 
 ## Data Models
 
@@ -80,9 +82,10 @@ All data sources implement `UsageAdapter`:
 ```swift
 protocol UsageAdapter {
     var id: String { get }
+    var tool: ToolKind { get }
     var displayName: String { get }
     var capabilities: AdapterCapabilities { get }
-    func refresh(source: UsageSource) async throws -> [UsageRecord]
+    func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore?, fullScan: Bool) async throws -> [UsageRecord]
 }
 ```
 
@@ -95,7 +98,7 @@ Capabilities declare:
 
 Adapters are isolated and registered by `AdapterRegistry`. Adding Cursor/OpenAI/Gemini/DeepSeek/Anthropic Console means adding a new adapter type without touching existing adapters.
 
-Initial adapters are placeholder/mock implementations for ClaudeCode, CodeX, Hermes, OpenClaw. They normalize records and exercise dedupe/cost/UI paths.
+Adapters read real local data: `LocalJSONLUsageAdapter` (ClaudeCode, CodeX, OpenClaw) parses JSONL line-by-line, while `HermesSQLiteUsageAdapter` and `OpenCodeSQLiteUsageAdapter` read SQLite databases read-only. All normalize into `UsageRecord` and share the dedupe/cost paths.
 
 ## Dedupe Strategy
 

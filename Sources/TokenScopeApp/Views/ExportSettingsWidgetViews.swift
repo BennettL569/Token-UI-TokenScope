@@ -42,8 +42,9 @@ struct ExportView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: UsageStore
+    @EnvironmentObject private var updater: UpdateManager
     @Environment(\.appLanguage) private var lang
-    @StateObject private var updater = UpdateManager()
+    @AppStorage(UpdateManager.autoCheckDefaultsKey) private var autoCheckUpdates = false
     @State private var confirmClear = false
     @State private var confirmFullRebuild = false
     @State private var confirmInstall = false
@@ -107,9 +108,14 @@ struct SettingsView: View {
     private var updatesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(lang.select("Updates", "更新")).font(.headline)
-            Text(lang.select("Current version", "当前版本") + " v\(updater.currentVersion)")
-                .font(.caption)
-                .foregroundStyle(Color.scopeTextMuted)
+            HStack(spacing: 6) {
+                Text(lang.select("Current version", "当前版本") + " v\(updater.currentVersion)")
+                if let checked = updater.lastChecked {
+                    Text("· " + lang.select("last checked \(Self.relativeTime(checked))", "上次检查 \(Self.relativeTime(checked))"))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(Color.scopeTextMuted)
             HStack(spacing: 12) {
                 Button {
                     Task { await updater.check() }
@@ -143,6 +149,26 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(updateStatusColor)
                 .lineLimit(3)
+            if let notes = updateReleaseNotes, !notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(lang.select("What's new", "更新内容")).font(.caption.weight(.semibold))
+                    ScrollView {
+                        Text(notes)
+                            .font(.caption)
+                            .foregroundStyle(Color.scopeTextMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 140)
+                }
+                .padding(8)
+                .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+            }
+            Toggle(lang.select("Check for updates automatically on launch", "启动时自动检查更新"), isOn: $autoCheckUpdates)
+                .font(.caption)
+            Text(lang.select("Only checks once on launch — never auto-installs, and makes no background network calls.", "仅在启动时检查一次，绝不自动安装，也不会后台联网。"))
+                .font(.caption2)
+                .foregroundStyle(Color.scopeTextMuted)
         }
         .confirmationDialog(updateConfirmTitle, isPresented: $confirmInstall, titleVisibility: .visible) {
             Button(lang.select("Download & Update", "下载并更新")) { Task { await updater.install() } }
@@ -186,6 +212,19 @@ struct SettingsView: View {
         case .failed: return .orange
         default: return Color.scopeTextMuted
         }
+    }
+
+    private var updateReleaseNotes: String? {
+        switch updater.phase {
+        case .available(let release), .manualDownload(let release): return release.notes
+        default: return nil
+        }
+    }
+
+    private static func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

@@ -18,6 +18,10 @@ final class UpdateManager: ObservableObject {
         case failed(String)
     }
 
+    /// UserDefaults key for the opt-in "check on launch" preference (read by the app at launch and
+    /// bound by the Settings toggle). Off by default — keeps the no-background-network promise.
+    static let autoCheckDefaultsKey = "TokenScopeAutoCheckUpdates"
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var lastChecked: Date?
 
@@ -83,7 +87,7 @@ final class UpdateManager: ObservableObject {
         guard case .available(let release) = phase, let zipURL = release.zipURL else { return }
         phase = .installing
         do {
-            try await Self.downloadAndStageSwap(zipURL: zipURL, destinationBundlePath: Bundle.main.bundlePath)
+            try await Self.downloadAndStageSwap(zipURL: zipURL, expectedVersion: release.version, destinationBundlePath: Bundle.main.bundlePath)
             // The detached helper now waits for us to quit, swaps the bundle (with rollback) and
             // relaunches. Quitting is the last thing we do.
             NSApp.terminate(nil)
@@ -118,7 +122,7 @@ final class UpdateManager: ObservableObject {
     /// Downloads + unzips the new build, then stages a detached helper that — once this process
     /// exits — replaces the bundle with a backup-and-rollback sequence so there is never a moment
     /// with no app present, and always reopens whatever ended up at the destination.
-    private static func downloadAndStageSwap(zipURL: URL, destinationBundlePath: String) async throws {
+    private static func downloadAndStageSwap(zipURL: URL, expectedVersion: String, destinationBundlePath: String) async throws {
         let (downloaded, response) = try await URLSession.shared.download(from: zipURL)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw UpdateError.http(http.statusCode)
@@ -133,6 +137,12 @@ final class UpdateManager: ObservableObject {
         try runProcess("/usr/bin/ditto", ["-x", "-k", zipPath.path, work.path])
 
         let newApp = try locateApp(in: work, fileManager: fileManager)
+        // Verify the download before trusting it enough to replace the running app: the bundle's
+        // version must match the release we intended, and its code signature must validate (this
+        // catches truncated/corrupted downloads and casual tampering). NOTE: an ad-hoc signature
+        // only proves the bundle is internally intact, not who produced it — real authenticity
+        // requires Developer ID + notarization (a separate roadmap item).
+        try verifyDownloadedApp(newApp, expectedVersion: expectedVersion)
         // The download is quarantined; clear it so the swapped-in copy launches without a prompt.
         _ = try? runProcess("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
 
@@ -181,6 +191,23 @@ final class UpdateManager: ObservableObject {
         try helper.run()
     }
 
+    /// Confirms the unzipped build is the version we expected and carries a valid code signature.
+    private static func verifyDownloadedApp(_ app: URL, expectedVersion: String) throws {
+        let infoPlist = app.appendingPathComponent("Contents/Info.plist")
+        guard let info = NSDictionary(contentsOf: infoPlist),
+              let version = info["CFBundleShortVersionString"] as? String, !version.isEmpty else {
+            throw UpdateError.verification("the downloaded build has no version")
+        }
+        guard !expectedVersion.isEmpty, version == expectedVersion else {
+            throw UpdateError.verification("version mismatch (expected \(expectedVersion), got \(version))")
+        }
+        do {
+            try runProcess("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
+        } catch {
+            throw UpdateError.verification("code signature did not validate")
+        }
+    }
+
     /// Finds the single `.app` produced by the unzip, instead of assuming its name.
     private static func locateApp(in directory: URL, fileManager: FileManager) throws -> URL {
         let contents = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
@@ -217,12 +244,15 @@ enum UpdateError: LocalizedError {
     case http(Int)
     case parse
     case missingApp
+    case verification(String)
     case process(String)
 
     var message: String {
         switch self {
         case .network:
             return NSLocalizedString("Network error.", comment: "")
+        case .verification(let detail):
+            return String(format: NSLocalizedString("Downloaded build failed verification: %@", comment: ""), detail)
         case .http(let code):
             switch code {
             case 403: return NSLocalizedString("GitHub rate limit reached — please try again later.", comment: "")

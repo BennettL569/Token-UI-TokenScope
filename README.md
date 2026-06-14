@@ -57,6 +57,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 - **Trends & distribution** — hour/day/month-bucketed trend chart, tool distribution and cache-hit rate.
 - **Cache-creation & request counts** — cache *creation* (write) is tracked separately from cache *read*, and request counts are aggregated per range/tool — surfaced on the dashboard, the Usage detail table and the tool distribution.
 - **Menu bar + widgets** — a `MenuBarExtra` mini panel (shows today's tokens or today's cost); WidgetKit widget source is included.
+- **In-app updates** — check GitHub Releases and update in place from **Settings → Updates**, with a safe backup-and-rollback swap (an interrupted update never leaves you without an app). Checks run only when you click — no background network.
 - **Export** — CSV / JSON export that **redacts** account / API-key identifiers by default.
 
 ---
@@ -101,6 +102,16 @@ cd Token-UI-TokenScope
 packaging/build_app.sh          # → dist/TokenScope.app (universal arm64+x86_64, ad-hoc signed, non-sandboxed)
 cp -R dist/TokenScope.app /Applications/
 ```
+
+### Keeping it up to date
+
+From **v1.1.6** the app updates itself — no need to re-download manually. Open **Settings → Updates**:
+
+- **Check for Updates** asks GitHub for the latest [release](https://github.com/BennettL569/Token-UI-TokenScope/releases) (only when you click it; there is no background or automatic network access).
+- **Update Now** — enabled only when a newer release exists — downloads that release's `…-macOS.zip`, replaces the app **in place**, and relaunches. The swap is staged with a backup-and-rollback, so a failed or interrupted update restores the previous version rather than leaving you with no app.
+- For reliable in-place updates, keep TokenScope in **/Applications**. If it is running from a read-only or Gatekeeper-translocated location (e.g. launched straight from the DMG), the updater can't replace itself there and instead opens the Releases page so you can update manually.
+
+> The first launch after an in-place update does not re-trigger Gatekeeper (the updater clears the quarantine flag on the new copy).
 
 ---
 

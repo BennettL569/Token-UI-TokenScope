@@ -43,8 +43,10 @@ struct ExportView: View {
 struct SettingsView: View {
     @EnvironmentObject private var store: UsageStore
     @Environment(\.appLanguage) private var lang
+    @StateObject private var updater = UpdateManager()
     @State private var confirmClear = false
     @State private var confirmFullRebuild = false
+    @State private var confirmInstall = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -82,6 +84,8 @@ struct SettingsView: View {
                         .disabled(store.isRefreshing)
                     }
                     Divider()
+                    updatesSection
+                    Divider()
                     Label(lang.select("No statistics are uploaded by default; all aggregation, import and export happen on this machine.", "默认不上传任何统计数据；所有聚合、导入、导出都在本机完成。"), systemImage: "lock.shield")
                     Label(lang.select("API keys are stored in the macOS Keychain; the UI shows only a masked identity.", "API Key 使用 macOS Keychain 保存，界面仅显示脱敏标识。"), systemImage: "key")
                     Button(role: .destructive) { confirmClear = true } label: {
@@ -97,6 +101,90 @@ struct SettingsView: View {
         .confirmationDialog(lang.select("Re-read all token data from scratch? This clears the current stats and rescans every configured data source, which takes longer than a normal incremental refresh.", "确认从头重读全部 Token 数据？这会清空当前统计并重新扫描全部已配置数据源，耗时会比普通增量刷新更长。"), isPresented: $confirmFullRebuild, titleVisibility: .visible) {
             Button(lang.select("Full rebuild", "全量重读"), role: .destructive) { Task { await store.rebuildAllData() } }
             Button(lang.select("Cancel", "取消"), role: .cancel) {}
+        }
+    }
+
+    private var updatesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(lang.select("Updates", "更新")).font(.headline)
+            Text(lang.select("Current version", "当前版本") + " v\(updater.currentVersion)")
+                .font(.caption)
+                .foregroundStyle(Color.scopeTextMuted)
+            HStack(spacing: 12) {
+                Button {
+                    Task { await updater.check() }
+                } label: {
+                    Label(lang.select("Check for Updates", "检查更新"), systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(updater.isBusy)
+
+                Button {
+                    confirmInstall = true
+                } label: {
+                    Label(lang.select("Update Now", "立即更新"), systemImage: "square.and.arrow.down.on.square")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.neonBlue)
+                .disabled(!updater.canInstall)
+
+                if case .manualDownload = updater.phase {
+                    Button {
+                        updater.openReleasePage()
+                    } label: {
+                        Label(lang.select("Open Releases Page", "前往下载页"), systemImage: "safari")
+                    }
+                }
+
+                if updater.isBusy {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            Text(updateStatusText)
+                .font(.caption)
+                .foregroundStyle(updateStatusColor)
+                .lineLimit(3)
+        }
+        .confirmationDialog(updateConfirmTitle, isPresented: $confirmInstall, titleVisibility: .visible) {
+            Button(lang.select("Download & Update", "下载并更新")) { Task { await updater.install() } }
+            Button(lang.select("Cancel", "取消"), role: .cancel) {}
+        } message: {
+            Text(lang.select("The app will download the new version, replace itself and relaunch automatically.", "应用会下载新版本、替换自身并自动重启。"))
+        }
+    }
+
+    private var updateConfirmTitle: String {
+        if let release = updater.availableRelease {
+            return lang.select("Update to \(release.tagName)?", "更新到 \(release.tagName)？")
+        }
+        return lang.select("Update?", "更新？")
+    }
+
+    private var updateStatusText: String {
+        switch updater.phase {
+        case .idle:
+            return lang.select("Not checked yet — click Check for Updates.", "尚未检查 — 点击检查更新。")
+        case .checking:
+            return lang.select("Checking…", "检查中…")
+        case .upToDate:
+            return lang.select("You're on the latest version.", "已是最新版本。")
+        case .available(let release):
+            return lang.select("New version \(release.tagName) is available.", "发现新版本 \(release.tagName)。")
+        case .manualDownload(let release):
+            return lang.select(
+                "Version \(release.tagName) is available, but this copy can't update itself here — open the releases page to update manually (move the app into Applications first).",
+                "发现新版本 \(release.tagName)，但当前位置无法自动更新 — 请前往下载页手动更新（建议先把 App 移到「应用程序」）。")
+        case .installing:
+            return lang.select("Downloading and installing… the app will relaunch.", "正在下载并安装…应用将自动重启。")
+        case .failed(let message):
+            return lang.select("Update failed: \(message)", "更新失败：\(message)")
+        }
+    }
+
+    private var updateStatusColor: Color {
+        switch updater.phase {
+        case .available, .manualDownload: return .green
+        case .failed: return .orange
+        default: return Color.scopeTextMuted
         }
     }
 }

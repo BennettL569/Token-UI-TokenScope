@@ -280,6 +280,33 @@ struct TokenScopeTests {
         #expect(ToolKind.openCode.reportsCacheCreation)
     }
 
+    @Test func updateServiceComparesVersionsNumerically() {
+        // "1.1.10" must beat "1.1.9" (plain string compare would not); v-prefix tolerated.
+        #expect(UpdateService.compare("1.1.10", "1.1.9") == .orderedDescending)
+        #expect(UpdateService.compare("1.1.5", "1.1.5") == .orderedSame)
+        #expect(UpdateService.compare("v1.2.0", "1.2") == .orderedSame)
+        #expect(UpdateService.isUpdateAvailable(latest: "1.1.6", current: "1.1.5"))
+        #expect(!UpdateService.isUpdateAvailable(latest: "1.1.5", current: "1.1.5"))
+        #expect(!UpdateService.isUpdateAvailable(latest: "1.1.5", current: "1.2.0"))
+    }
+
+    @Test func updateServiceParsesGitHubRelease() {
+        let json = """
+        {"tag_name":"v1.1.6","html_url":"https://github.com/o/r/releases/tag/v1.1.6","body":"notes here",
+         "assets":[
+           {"name":"TokenScope-1.1.6.dmg","browser_download_url":"https://example.com/TokenScope-1.1.6.dmg"},
+           {"name":"TokenScope-1.1.6-macOS.zip","browser_download_url":"https://example.com/TokenScope-1.1.6-macOS.zip"}
+         ]}
+        """
+        let release = UpdateService.parseRelease(Data(json.utf8))
+        #expect(release?.tagName == "v1.1.6")
+        #expect(release?.version == "1.1.6")
+        #expect(release?.zipURL?.absoluteString == "https://example.com/TokenScope-1.1.6-macOS.zip")
+        #expect(release?.htmlURL != nil)
+        #expect(release?.notes == "notes here")
+        #expect(UpdateService.parseRelease(Data("not json".utf8)) == nil)
+    }
+
     @Test func refreshCursorsMigratesModelColumnOnOldDatabase() throws {
         // Fix A migration: a refresh_cursors table predating the `model` column gains it on open,
         // pre-migration rows read back a nil model, and new model read/writes work.

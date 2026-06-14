@@ -23,6 +23,8 @@ struct TokenScopeCoreTestsRunner {
         try await codexAdapterThreadsModelAndSurvivesIncrementalResume()
         try pricingMergeSeedsNewModelsWithoutResurrectingDeleted()
         try toolKindReportsCacheCreationOnlyForWritingTools()
+        try updateServiceComparesVersionsNumerically()
+        try updateServiceParsesGitHubRelease()
         try await refreshCursorsMigratesModelColumnOnOldDatabase()
         try openClawParserReadsUsageLine()
         try hermesParserIncludesReasoningTokens()
@@ -36,7 +38,7 @@ struct TokenScopeCoreTestsRunner {
         try budgetsPersistInSQLite()
         try budgetProgressCanUseTokenOrCostMode()
         try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates()
-        print("TokenScopeCoreTestsRunner: 31 checks passed")
+        print("TokenScopeCoreTestsRunner: 33 checks passed")
     }
 
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -272,6 +274,34 @@ struct TokenScopeCoreTestsRunner {
         for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode] {
             try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
         }
+    }
+
+    static func updateServiceComparesVersionsNumerically() throws {
+        // Dotted numeric compare: "1.1.10" must beat "1.1.9" (plain string compare would not),
+        // a "v" prefix is tolerated, and missing components count as 0.
+        try expect(UpdateService.compare("1.1.10", "1.1.9") == .orderedDescending, "1.1.10 should be newer than 1.1.9")
+        try expect(UpdateService.compare("1.1.5", "1.1.5") == .orderedSame, "equal versions mismatch")
+        try expect(UpdateService.compare("v1.2.0", "1.2") == .orderedSame, "missing trailing component should be 0 and v-prefix tolerated")
+        try expect(UpdateService.isUpdateAvailable(latest: "1.1.6", current: "1.1.5"), "1.1.6 should be offered over 1.1.5")
+        try expect(!UpdateService.isUpdateAvailable(latest: "1.1.5", current: "1.1.5"), "same version must not offer an update")
+        try expect(!UpdateService.isUpdateAvailable(latest: "1.1.5", current: "1.2.0"), "older release must not offer an update")
+    }
+
+    static func updateServiceParsesGitHubRelease() throws {
+        let json = """
+        {"tag_name":"v1.1.6","html_url":"https://github.com/o/r/releases/tag/v1.1.6","body":"notes here",
+         "assets":[
+           {"name":"TokenScope-1.1.6.dmg","browser_download_url":"https://example.com/TokenScope-1.1.6.dmg"},
+           {"name":"TokenScope-1.1.6-macOS.zip","browser_download_url":"https://example.com/TokenScope-1.1.6-macOS.zip"}
+         ]}
+        """
+        let release = UpdateService.parseRelease(Data(json.utf8))
+        try expect(release?.tagName == "v1.1.6", "tag mismatch")
+        try expect(release?.version == "1.1.6", "version should strip the v prefix")
+        try expect(release?.zipURL?.absoluteString == "https://example.com/TokenScope-1.1.6-macOS.zip", "should pick the macOS zip asset, not the dmg")
+        try expect(release?.htmlURL != nil, "html url missing")
+        try expect(release?.notes == "notes here", "notes missing")
+        try expect(UpdateService.parseRelease(Data("not json".utf8)) == nil, "invalid payload should parse to nil")
     }
 
     static func refreshCursorsMigratesModelColumnOnOldDatabase() async throws {

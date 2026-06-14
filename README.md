@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.5-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.6-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -341,6 +341,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.6** | Add an **in-app updater** in Settings. **Check for Updates** queries GitHub Releases; **Update Now** downloads the new build and replaces the app in place (backup-and-rollback swap, so a failed swap never destroys the install) then relaunches. Update Now stays disabled until a check finds a newer release that can be installed in place — if the app is running from a read-only or Gatekeeper-translocated location it routes you to the releases page instead. Checks run only on click (no automatic/background network calls). |
 | **v1.1.5** | Clarify the dashboard **Cache Creation** metric for tools that don't report cache-write tokens: when filtered to Codex (OpenAI accounting reports cache *reads* only, no cache writes), the card shows an info-icon hint explaining the structural 0 instead of it looking like a bug. UI only — no data, parser or pricing changes. |
 | **v1.1.4** | Fix Codex usage being recorded under the model name `codex`: the real model (e.g. `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`) is now read from each turn's `turn_context` event and carried onto the token-count records — including across incremental syncs, where the model is persisted alongside the resume cursor. Adds default pricing for the new Codex models (seeded for upgrading users without overwriting edited or deleted prices) and a one-time corrective rescan on first launch. |
 | **v1.1.3** | New statistics: **cache creation** (write) tokens tracked separately from cache read, and **request counts** per range/tool — shown on the dashboard, the Usage detail table and the tool distribution. Adds an auto-migrated `cache_creation_tokens` column and a one-time backfill rescan on first launch. Also adds a **delete** action (with confirmation) to the Pricing screen so manually added prices can be removed. |

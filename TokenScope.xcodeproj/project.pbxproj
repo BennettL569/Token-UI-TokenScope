@@ -25,6 +25,7 @@
 		3F0B365F49BFBF77DBA63C66 /* UsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735F7CC257AC335E64F5501B /* UsageStore.swift */; };
 		43C762F4BD8E990C23826CC1 /* TokenScopeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C974DA5A8316A8C7E216D23D /* TokenScopeWidget.swift */; };
 		4A6EE3A1D1264B428D179D9D /* OpenCodeSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */; };
+		D0DE00000000000000000002 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
 		52E2BE93909F36CFB637BED7 /* UsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735F7CC257AC335E64F5501B /* UsageStore.swift */; };
 		53AAC978533C5D9EB6C91F4F /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = DCDDE353B9782CAA309FBF4C /* libsqlite3.tbd */; };
 		573434521A0A885697988F00 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6A50A6A8D04FF0C84E8E31F2 /* Cocoa.framework */; };
@@ -50,6 +51,7 @@
 		B1DD73203D41A541BD5E378A /* PersistentUsageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1244D8BE83989DC55FC9301D /* PersistentUsageRepository.swift */; };
 		B5AE65B932CFCFFC0282B6FC /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = EC3ABAE78A530DDB7B8B9900 /* libsqlite3.tbd */; };
 		B8884838E9047A582BE43107 /* OpenCodeSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */; };
+		D0DE00000000000000000003 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
 		BEB70790C25416580BDEFBBB /* Engines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B773EAAEE7240E9246B952 /* Engines.swift */; };
 		C3B4471C4B6AD4EFFD63FA37 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B9732FC14793F41770A905 /* Models.swift */; };
 		C5C16310EBCD19AFAD866848 /* ChartsAndBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E7D38213C7A3B8E5286654 /* ChartsAndBudget.swift */; };
@@ -147,6 +149,7 @@
 		C994866F867AFE0F979E3DD7 /* KeychainService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeychainService.swift; path = "Sources/TokenScopeCore/Services/KeychainService.swift"; sourceTree = SOURCE_ROOT; };
 		D62BECDBAC13D691A91A343A /* WidgetSummaryStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetSummaryStore.swift; path = "Sources/TokenScopeCore/Services/WidgetSummaryStore.swift"; sourceTree = SOURCE_ROOT; };
 		D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = OpenCodeSQLiteUsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/OpenCodeSQLiteUsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = QoderSQLiteUsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/QoderSQLiteUsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
 		DCDDE353B9782CAA309FBF4C /* libsqlite3.tbd */ = {isa = PBXFileReference; includeInIndex = 1; path = libsqlite3.tbd; sourceTree = "<group>"; };
 		E583DF1A112511E872E7FDC6 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Security.framework; sourceTree = "<group>"; };
 		E929B914BBD011E50E1CB105 /* LocalUsageAdapters.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LocalUsageAdapters.swift; path = "Sources/TokenScopeCore/Adapters/LocalUsageAdapters.swift"; sourceTree = SOURCE_ROOT; };
@@ -278,6 +281,7 @@
 				5332E15FAC8123DD8758ECD7 /* Config */,
 				64AE8D95A46FB5AE673E8B4D /* Tests */,
 				D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */,
+				D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */,
 				628C459FF37678D281E610AF /* Assets.xcassets */,
 			);
 			sourceTree = "<group>";
@@ -520,6 +524,7 @@
 				3E24990B8D4C71F76CA6F3D9 /* PersistentUsageRepository.swift in Sources */,
 				3F0B365F49BFBF77DBA63C66 /* UsageStore.swift in Sources */,
 				4A6EE3A1D1264B428D179D9D /* OpenCodeSQLiteUsageAdapter.swift in Sources */,
+				D0DE00000000000000000002 /* QoderSQLiteUsageAdapter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -555,6 +560,7 @@
 				B1DD73203D41A541BD5E378A /* PersistentUsageRepository.swift in Sources */,
 				52E2BE93909F36CFB637BED7 /* UsageStore.swift in Sources */,
 				B8884838E9047A582BE43107 /* OpenCodeSQLiteUsageAdapter.swift in Sources */,
+				D0DE00000000000000000003 /* QoderSQLiteUsageAdapter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -37,6 +37,10 @@ struct TokenScopeCoreTestsRunner {
             ("sqliteAdapterReadsWalModeDatabaseAfterWriterClosed", { try await sqliteAdapterReadsWalModeDatabaseAfterWriterClosed() }),
             ("openCodeParserReadsMessageRow", { try openCodeParserReadsMessageRow() }),
             ("openCodeParserReadsNestedTokensCacheShape", { try openCodeParserReadsNestedTokensCacheShape() }),
+            ("openCodeParserSubtractsOpenAICachedInputFromInput", { try openCodeParserSubtractsOpenAICachedInputFromInput() }),
+            ("qoderParserReadsMessageRow", { try qoderParserReadsMessageRow() }),
+            ("qoderParserReadsFlatUsageWithCostObjectAndQuotedModel", { try qoderParserReadsFlatUsageWithCostObjectAndQuotedModel() }),
+            ("qoderParserReadsNestedUsageAndBareModel", { try qoderParserReadsNestedUsageAndBareModel() }),
             ("persistentRepositoryKeepsHistoricalRecords", { try await persistentRepositoryKeepsHistoricalRecords() }),
             ("pricingPersistsInSQLite", { try pricingPersistsInSQLite() }),
             ("pricingCanBeDeleted", { try pricingCanBeDeleted() }),
@@ -285,7 +289,7 @@ struct TokenScopeCoreTestsRunner {
         // creation is structurally 0; the dashboard uses this flag to explain that 0. Every other
         // tool can report cache writes.
         try expect(ToolKind.codeX.reportsCacheCreation == false, "Codex must not be marked as reporting cache creation")
-        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode] {
+        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder] {
             try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
         }
     }
@@ -500,6 +504,84 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.outputTokens == 303, "opencode nested output+reasoning mismatch")
         try expect(record?.cacheTokens == 9229, "opencode nested cache mismatch")
         try expect(record?.totalTokens == 9831, "opencode nested total mismatch")
+    }
+
+    static func openCodeParserSubtractsOpenAICachedInputFromInput() throws {
+        // OpenAI-style payload routed through OpenCode: cached_input_tokens is a SUBSET of input, so
+        // it must be subtracted (120-30=90) and not double-counted in both input and cache.
+        let data = """
+        {"role":"assistant","modelID":"gpt-5.1-codex","providerID":"openai","usage":{"input_tokens":120,"output_tokens":48,"cached_input_tokens":30,"reasoning_output_tokens":8}}
+        """
+        let record = LocalUsageParser.parseOpenCodeMessageRow(id: "row_oa", sessionId: "ses_oa", timeCreated: 1_777_000_000_000, data: data, rawSource: "/tmp/opencode.db:message", pricing: [])
+        try expect(record?.source == .openCode, "opencode openai source mismatch")
+        try expect(record?.model == "gpt-5.1-codex", "opencode openai model mismatch")
+        try expect(record?.apiKeyHash == "openai", "opencode openai provider mismatch")
+        try expect(record?.inputTokens == 90, "opencode openai input must subtract cached subset")
+        try expect(record?.outputTokens == 56, "opencode openai output+reasoning mismatch")
+        try expect(record?.cacheTokens == 30, "opencode openai cache mismatch")
+        try expect(record?.cacheReadTokens == 30, "opencode openai cache read mismatch")
+        try expect(record?.totalTokens == 176, "opencode openai total must not double-count cached tokens")
+    }
+
+    static func qoderParserReadsMessageRow() throws {
+        // Flat OpenAI-style token_info + JSON model_info: cached_input_tokens is a SUBSET of input
+        // (so it's subtracted from input: 120-30=90), reasoning folds into output, provider comes
+        // from model_info. Total must NOT double-count the cached tokens.
+        let tokenInfo = """
+        {"input_tokens":120,"output_tokens":48,"cached_input_tokens":30,"reasoning_output_tokens":8}
+        """
+        let modelInfo = """
+        {"model":"claude-sonnet-4","provider":"anthropic"}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(id: "m1", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(record?.source == .qoder, "qoder source mismatch")
+        try expect(record?.accountId == "s1", "qoder session mismatch")
+        try expect(record?.apiKeyHash == "anthropic", "qoder provider mismatch")
+        try expect(record?.model == "claude-sonnet-4", "qoder model mismatch")
+        try expect(record?.inputTokens == 90, "qoder input mismatch (cached_input subset must be subtracted)")
+        try expect(record?.outputTokens == 56, "qoder output+reasoning mismatch")
+        try expect(record?.cacheTokens == 30, "qoder cache mismatch")
+        try expect(record?.cacheCreationTokens == 0, "qoder cache creation (write) should be 0 for read-only cache")
+        try expect(record?.cacheReadTokens == 30, "qoder cache read mismatch")
+        try expect(record?.totalTokens == 176, "qoder total must not double-count cached tokens")
+    }
+
+    static func qoderParserReadsFlatUsageWithCostObjectAndQuotedModel() throws {
+        // Flat token_info carrying a nested cost breakdown must NOT be dropped (the cost object must
+        // not shadow the flat token counts); cache.read/write are disjoint from input; model_info is
+        // a JSON-encoded (quoted) scalar string that must be unquoted.
+        let tokenInfo = """
+        {"input_tokens":100,"output_tokens":50,"cache":{"read":30,"write":10},"cost":{"total":0.5}}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(id: "m3", sessionId: "s3", tokenInfo: tokenInfo, modelInfo: "\"qwen-max\"", gmtCreate: 1_777_000_002_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(record?.source == .qoder, "qoder flat-cost source mismatch")
+        try expect(record?.model == "qwen-max", "qoder quoted model should be unquoted")
+        try expect(record?.apiKeyHash == "local-qoder", "qoder flat-cost provider fallback mismatch")
+        try expect(record?.inputTokens == 100, "qoder flat-cost input mismatch (cache.read is disjoint, not a subset)")
+        try expect(record?.outputTokens == 50, "qoder flat-cost output mismatch")
+        try expect(record?.cacheTokens == 40, "qoder flat-cost cache mismatch")
+        try expect(record?.cacheCreationTokens == 10, "qoder flat-cost cache write mismatch")
+        try expect(record?.cacheReadTokens == 30, "qoder flat-cost cache read mismatch")
+        try expect(record?.totalTokens == 190, "qoder flat-cost total mismatch")
+        try expect(abs(NSDecimalNumber(decimal: record?.estimatedCost ?? 0).doubleValue - 0.5) < 0.0001, "qoder nested cost.total mismatch")
+    }
+
+    static func qoderParserReadsNestedUsageAndBareModel() throws {
+        // Usage nested under "usage", prompt/completion naming, nested cache read/write, and a bare
+        // (non-JSON) model string in model_info.
+        let tokenInfo = """
+        {"usage":{"prompt_tokens":200,"completion_tokens":90,"cache":{"read":50,"write":12}}}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(id: "m2", sessionId: "s2", tokenInfo: tokenInfo, modelInfo: "qwen3-coder", gmtCreate: 1_777_000_001, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(record?.source == .qoder, "qoder nested source mismatch")
+        try expect(record?.apiKeyHash == "local-qoder", "qoder nested provider fallback mismatch")
+        try expect(record?.model == "qwen3-coder", "qoder bare-string model mismatch")
+        try expect(record?.inputTokens == 200, "qoder nested input mismatch")
+        try expect(record?.outputTokens == 90, "qoder nested output mismatch")
+        try expect(record?.cacheTokens == 62, "qoder nested cache mismatch")
+        try expect(record?.cacheCreationTokens == 12, "qoder nested cache write mismatch")
+        try expect(record?.cacheReadTokens == 50, "qoder nested cache read mismatch")
+        try expect(record?.totalTokens == 352, "qoder nested total mismatch")
     }
 
     static func persistentRepositoryKeepsHistoricalRecords() async throws {

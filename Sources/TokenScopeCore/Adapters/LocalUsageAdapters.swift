@@ -112,11 +112,18 @@ public enum LocalUsageParser {
     public static func parseOpenCodeMessageRow(id: String, sessionId: String, timeCreated: Double, data: String, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
         guard let object = parseJSONObject(data) else { return nil }
         let usage = firstUsageDictionary(in: object)
-        let input = intFromKeys(usage, ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "input"])
+        let cacheDict = usage["cache"] as? [String: Any]
+        // OpenAI accounting: cachedInputTokens / cached_input_tokens are a SUBSET of input (the
+        // cache-read portion already inside the input count), so subtract them from input and keep
+        // them in the cache bucket — counting them in both inflates totals and over-bills cost (the
+        // same handling as parseCodexLine). cacheReadTokens and the nested cache.read are disjoint.
+        let cachedSubset = intFromKeys(usage, ["cachedInputTokens", "cached_input_tokens"])
+        let rawInput = intFromKeys(usage, ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "input"])
+        let input = max(0, rawInput - cachedSubset)
         let output = intFromKeys(usage, ["outputTokens", "output_tokens", "completionTokens", "completion_tokens", "output"])
             + intFromKeys(usage, ["reasoningTokens", "reasoning_tokens", "reasoningOutputTokens", "reasoning_output_tokens", "reasoning"])
-        let cacheDict = usage["cache"] as? [String: Any]
-        let cacheRead = intFromKeys(usage, ["cacheReadTokens", "cache_read_tokens", "cachedInputTokens", "cached_input_tokens", "cacheRead"])
+        let cacheRead = cachedSubset
+            + intFromKeys(usage, ["cacheReadTokens", "cache_read_tokens", "cacheRead"])
             + intFromKeys(cacheDict ?? [:], ["read", "cacheRead", "cache_read_tokens", "cachedInputTokens", "cached_input_tokens"])
         let cacheWrite = intFromKeys(usage, ["cacheWriteTokens", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheWrite"])
             + intFromKeys(cacheDict ?? [:], ["write", "cacheWrite", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"])
@@ -138,6 +145,96 @@ public enum LocalUsageParser {
             record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
         }
         return record
+    }
+
+    /// Qoder (Alibaba's AI IDE) stores one row per chat message in its `chat_message` table; token
+    /// usage is a JSON blob in `token_info` and the model in `model_info`. The exact field names
+    /// inside those blobs are not yet pinned down from real data (the table is empty until Qoder is
+    /// used), so parse defensively — accept a flat usage object or one nested under `usage`/`tokens`,
+    /// and match the usual snake/camel-case names.
+    ///
+    /// Accounting uses the disjoint input/output/cache buckets the rest of the app expects, with one
+    /// OpenAI-specific correction: `cached_input_tokens`/`cached_tokens` are a SUBSET of the input
+    /// count (the cache-read portion already inside `input_tokens`), so they are subtracted from
+    /// input and moved into the cache bucket — otherwise those tokens would be counted twice and
+    /// over-bill cost (the same handling as `parseCodexLine`). The `cache_read*` / nested
+    /// `cache.read` families are genuinely disjoint from input and are added as-is.
+    ///
+    /// The per-message `id` (a unique primary key) is used as the dedupe id: several messages can
+    /// share one `request_id`, so keying on `request_id` would collapse them and undercount tokens.
+    public static func parseQoderMessageRow(id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
+        guard let parsed = parseJSONObject(tokenInfo) else { return nil }
+
+        // Pull raw counts out of one dictionary. `cachedSubset` is the OpenAI cache-read that lives
+        // *inside* the input count; `cacheReadDisjoint` is a separate bucket added on top.
+        func extract(_ d: [String: Any]) -> (rawInput: Int, output: Int, cachedSubset: Int, cacheReadDisjoint: Int, cacheWrite: Int) {
+            let cacheDict = d["cache"] as? [String: Any] ?? [:]
+            let rawInput = intFromKeys(d, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "input", "prompt"])
+            let output = intFromKeys(d, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens", "output", "completion"])
+                + intFromKeys(d, ["reasoning_output_tokens", "reasoning_tokens", "reasoningOutputTokens", "reasoningTokens", "reasoning"])
+            let cachedSubset = intFromKeys(d, ["cached_input_tokens", "cachedInputTokens", "cached_tokens", "cachedTokens"])
+            let cacheReadDisjoint = intFromKeys(d, ["cache_read_tokens", "cacheReadTokens", "cache_read", "cacheRead"])
+                + intFromKeys(cacheDict, ["read", "cacheRead", "cache_read_tokens"])
+            let cacheWrite = intFromKeys(d, ["cache_creation_input_tokens", "cache_write_tokens", "cacheWriteTokens", "cacheCreationInputTokens", "cache_write", "cacheWrite", "cache_creation"])
+                + intFromKeys(cacheDict, ["write", "cacheWrite", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"])
+            return (rawInput, output, cachedSubset, cacheReadDisjoint, cacheWrite)
+        }
+
+        // `token_info` is usually the usage object itself. Only when the top level carries no token
+        // counts do we fall back to a nested `usage`/`tokens` object — this also stops a sibling
+        // `cost` object from shadowing real flat token counts.
+        var usageDict = parsed
+        var t = extract(parsed)
+        if t.rawInput + t.output + t.cachedSubset + t.cacheReadDisjoint + t.cacheWrite == 0 {
+            let nested = firstUsageDictionary(in: parsed)
+            if !nested.isEmpty { t = extract(nested); usageDict = nested }
+        }
+        let cacheWrite = t.cacheWrite
+        let cache = t.cacheReadDisjoint + t.cachedSubset + cacheWrite
+        let input = max(0, t.rawInput - t.cachedSubset)
+        let output = t.output
+        guard input + output + cache > 0 else { return nil }
+
+        // `model_info` may be a JSON object ({"model":..,"provider":..}), a bare model string, or a
+        // JSON-encoded scalar string ("claude-sonnet-4" with quotes) — normalise all three.
+        let model: String
+        let provider: String?
+        if let modelInfo, let modelObject = parseJSONObject(modelInfo) {
+            model = stringFromKeys(modelObject, ["model", "modelId", "modelID", "modelName", "model_name", "name", "id"]) ?? "qoder"
+            provider = stringFromKeys(modelObject, ["provider", "providerId", "providerID", "vendor", "source"])
+        } else {
+            model = bareModelString(modelInfo ?? "")
+            provider = nil
+        }
+
+        let timestamp = Date(timeIntervalSince1970: normalizedEpoch(gmtCreate))
+        var record = UsageRecord(source: .qoder, accountId: sessionId, apiKeyHash: provider ?? "local-qoder", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: id, rawSource: rawSource)
+        // Cost may be a flat number on the usage/parsed object, or a nested {cost:{total:..}}
+        // breakdown (the OpenClaw shape). Prefer a source-provided cost; otherwise estimate.
+        let costKeys = ["cost", "costUSD", "cost_usd", "estimatedCost", "estimated_cost", "total_cost", "totalCost"]
+        let nestedCost = ((usageDict["cost"] as? [String: Any]) ?? (parsed["cost"] as? [String: Any]))
+            .flatMap { decimalFromKeys($0, ["total", "totalCost", "total_cost", "usd", "amount"]) }
+        if let cost = decimalFromKeys(usageDict, costKeys) ?? decimalFromKeys(parsed, costKeys) ?? nestedCost {
+            record.estimatedCost = cost
+        } else {
+            record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
+        }
+        return record
+    }
+
+    /// Normalises `model_info` when it is not a JSON object: a JSON-encoded scalar string keeps its
+    /// surrounding quotes through a plain read, so decode that case; reject a stray object/array
+    /// fragment (not a usable model name) and fall back to "qoder".
+    private static func bareModelString(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "qoder" }
+        if trimmed.hasPrefix("\""), let data = trimmed.data(using: .utf8),
+           let decoded = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? String,
+           !decoded.isEmpty {
+            return decoded
+        }
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return "qoder" }
+        return trimmed
     }
 
     private static func parseJSONObject(_ line: String) -> [String: Any]? {
@@ -187,7 +284,8 @@ public enum LocalUsageParser {
     }
 
     private static func normalizedEpoch(_ value: Double) -> Double {
-        value > 10_000_000_000 ? value / 1000.0 : value
+        // Use the same seconds/millis cutoff as the SQLite adapters' WHERE clauses (>= is millis).
+        value >= 10_000_000_000 ? value / 1000.0 : value
     }
 
     private static func firstUsageDictionary(in value: Any?) -> [String: Any] {

@@ -6,6 +6,7 @@ public enum ToolKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case hermes = "Hermes"
     case openClaw = "OpenClaw"
     case openCode = "OpenCode"
+    case qoder = "Qoder"
 
     public var id: String { rawValue }
 
@@ -16,7 +17,7 @@ public enum ToolKind: String, Codable, CaseIterable, Identifiable, Sendable {
     public var reportsCacheCreation: Bool {
         switch self {
         case .codeX: return false
-        case .claudeCode, .hermes, .openClaw, .openCode: return true
+        case .claudeCode, .hermes, .openClaw, .openCode, .qoder: return true
         }
     }
 }

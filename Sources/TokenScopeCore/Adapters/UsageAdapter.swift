@@ -94,6 +94,7 @@ public struct PlaceholderUsageAdapter: UsageAdapter {
         case .hermes: return ["gpt-5.5", "claude-sonnet-4"]
         case .openClaw: return ["openclaw-agent", "qwen3-coder"]
         case .openCode: return ["opencode", "claude-sonnet-4"]
+        case .qoder: return ["qoder", "claude-sonnet-4"]
         }
     }
 }
@@ -138,7 +139,8 @@ public struct AdapterRegistry: Sendable {
                 defaultGlobPatterns: ["~/.openclaw/agents/*/sessions/*.jsonl"],
                 parser: LocalUsageParser.parseOpenClawLine
             ),
-            .openCode: OpenCodeSQLiteUsageAdapter()
+            .openCode: OpenCodeSQLiteUsageAdapter(),
+            .qoder: QoderSQLiteUsageAdapter()
         ]
     }
 

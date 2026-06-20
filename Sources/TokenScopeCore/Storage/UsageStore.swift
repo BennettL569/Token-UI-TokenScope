@@ -498,7 +498,9 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
             ModelPricing(tool: .openClaw, model: "qwen3-coder", inputPerMillion: 0.8, outputPerMillion: 2.4, cachePerMillion: 0.08),
             ModelPricing(tool: .openCode, model: "opencode", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
             ModelPricing(tool: .openCode, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .openCode, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5)
+            ModelPricing(tool: .openCode, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+            ModelPricing(tool: .qoder, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+            ModelPricing(tool: .qoder, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3)
         ]
     }
 }

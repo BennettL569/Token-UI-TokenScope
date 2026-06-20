@@ -279,6 +279,28 @@ struct TokenScopeTests {
         #expect(ToolKind.openClaw.reportsCacheCreation)
         #expect(ToolKind.openCode.reportsCacheCreation)
         #expect(ToolKind.qoder.reportsCacheCreation)
+        #expect(ToolKind.qoderCN.reportsCacheCreation)
+    }
+
+    @Test func qoderCNParserTagsRecordsAsQoderCN() {
+        // The CN build reuses the same parser/schema; passing tool: .qoderCN must tag the record as
+        // .qoderCN (distinct dedupe namespace) and use the CN fallback hash.
+        let tokenInfo = """
+        {"input_tokens":120,"output_tokens":48,"cached_input_tokens":30}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(tool: .qoderCN, id: "cn1", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: nil, gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qodercn.db:chat_message", pricing: [])
+        #expect(record?.source == .qoderCN)
+        #expect(record?.apiKeyHash == "local-qodercn")
+        #expect(record?.model == "qoder")
+        #expect(record?.inputTokens == 90)
+        #expect(record?.cacheTokens == 30)
+        #expect(record?.totalTokens == 168)
+    }
+
+    @Test func qoderCNAdapterIsRegistered() {
+        let adapter = AdapterRegistry.defaultAdapters()[.qoderCN]
+        #expect(adapter != nil)
+        #expect(adapter?.tool == .qoderCN)
     }
 
     @Test func openCodeParserSubtractsOpenAICachedInputFromInput() {

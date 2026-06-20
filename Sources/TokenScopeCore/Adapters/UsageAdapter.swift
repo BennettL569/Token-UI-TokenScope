@@ -94,7 +94,7 @@ public struct PlaceholderUsageAdapter: UsageAdapter {
         case .hermes: return ["gpt-5.5", "claude-sonnet-4"]
         case .openClaw: return ["openclaw-agent", "qwen3-coder"]
         case .openCode: return ["opencode", "claude-sonnet-4"]
-        case .qoder: return ["qoder", "claude-sonnet-4"]
+        case .qoder, .qoderCN: return ["qoder", "claude-sonnet-4"]
         }
     }
 }
@@ -140,7 +140,12 @@ public struct AdapterRegistry: Sendable {
                 parser: LocalUsageParser.parseOpenClawLine
             ),
             .openCode: OpenCodeSQLiteUsageAdapter(),
-            .qoder: QoderSQLiteUsageAdapter()
+            .qoder: QoderSQLiteUsageAdapter(),
+            .qoderCN: QoderSQLiteUsageAdapter(
+                tool: .qoderCN,
+                displayName: "Qoder CN SQLite",
+                defaultPaths: ["~/Library/Application Support/QoderCN/SharedClientCache/cache/db/local.db"]
+            )
         ]
     }
 

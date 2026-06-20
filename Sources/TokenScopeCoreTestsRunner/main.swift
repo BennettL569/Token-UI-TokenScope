@@ -41,6 +41,8 @@ struct TokenScopeCoreTestsRunner {
             ("qoderParserReadsMessageRow", { try qoderParserReadsMessageRow() }),
             ("qoderParserReadsFlatUsageWithCostObjectAndQuotedModel", { try qoderParserReadsFlatUsageWithCostObjectAndQuotedModel() }),
             ("qoderParserReadsNestedUsageAndBareModel", { try qoderParserReadsNestedUsageAndBareModel() }),
+            ("qoderCNParserTagsRecordsAsQoderCN", { try qoderCNParserTagsRecordsAsQoderCN() }),
+            ("qoderCNAdapterIsRegistered", { try qoderCNAdapterIsRegistered() }),
             ("persistentRepositoryKeepsHistoricalRecords", { try await persistentRepositoryKeepsHistoricalRecords() }),
             ("pricingPersistsInSQLite", { try pricingPersistsInSQLite() }),
             ("pricingCanBeDeleted", { try pricingCanBeDeleted() }),
@@ -289,7 +291,7 @@ struct TokenScopeCoreTestsRunner {
         // creation is structurally 0; the dashboard uses this flag to explain that 0. Every other
         // tool can report cache writes.
         try expect(ToolKind.codeX.reportsCacheCreation == false, "Codex must not be marked as reporting cache creation")
-        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder] {
+        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder, .qoderCN] {
             try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
         }
     }
@@ -564,6 +566,27 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.cacheReadTokens == 30, "qoder flat-cost cache read mismatch")
         try expect(record?.totalTokens == 190, "qoder flat-cost total mismatch")
         try expect(abs(NSDecimalNumber(decimal: record?.estimatedCost ?? 0).doubleValue - 0.5) < 0.0001, "qoder nested cost.total mismatch")
+    }
+
+    static func qoderCNParserTagsRecordsAsQoderCN() throws {
+        // The CN build reuses the same parser/schema; passing tool: .qoderCN must tag the record as
+        // .qoderCN (distinct dedupe namespace from international Qoder) and use the CN fallback hash.
+        let tokenInfo = """
+        {"input_tokens":120,"output_tokens":48,"cached_input_tokens":30}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(tool: .qoderCN, id: "cn1", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: nil, gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qodercn.db:chat_message", pricing: [])
+        try expect(record?.source == .qoderCN, "qoderCN source mismatch")
+        try expect(record?.apiKeyHash == "local-qodercn", "qoderCN fallback hash mismatch")
+        try expect(record?.model == "qoder", "qoderCN model fallback mismatch")
+        try expect(record?.inputTokens == 90, "qoderCN input must subtract cached subset")
+        try expect(record?.cacheTokens == 30, "qoderCN cache mismatch")
+        try expect(record?.totalTokens == 168, "qoderCN total mismatch")
+    }
+
+    static func qoderCNAdapterIsRegistered() throws {
+        let adapter = AdapterRegistry.defaultAdapters()[.qoderCN]
+        try expect(adapter != nil, "qoderCN adapter not registered")
+        try expect(adapter?.tool == .qoderCN, "qoderCN adapter tool mismatch")
     }
 
     static func qoderParserReadsNestedUsageAndBareModel() throws {

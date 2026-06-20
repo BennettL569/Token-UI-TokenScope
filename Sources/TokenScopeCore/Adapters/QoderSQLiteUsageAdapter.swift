@@ -12,14 +12,26 @@ import SQLite3
 /// usage shapes and the usual snake/camel-case field names. Re-verify the field mapping once real
 /// rows exist.
 public struct QoderSQLiteUsageAdapter: UsageAdapter {
-    public let id = "qoder-sqlite"
-    public let tool: ToolKind = .qoder
-    public let displayName = "Qoder SQLite"
+    public let id: String
+    public let tool: ToolKind
+    public let displayName: String
     public let capabilities: AdapterCapabilities = [.supportsLocalLogs, .supportsCostEstimation]
-    private let defaultPaths = ["~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db"]
+    private let defaultPaths: [String]
     private let incrementalLookbackSeconds: Double = 24 * 60 * 60
 
-    public init() {}
+    /// Defaults to the international Qoder install. The CN build (`Qoder CN.app`) writes the same
+    /// `chat_message` schema under `~/Library/Application Support/QoderCN/...`, so it is registered
+    /// as a separate tool by passing `tool: .qoderCN` and the CN `defaultPaths`.
+    public init(
+        tool: ToolKind = .qoder,
+        displayName: String = "Qoder SQLite",
+        defaultPaths: [String] = ["~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db"]
+    ) {
+        self.tool = tool
+        self.id = tool.rawValue.lowercased() + "-sqlite"
+        self.displayName = displayName
+        self.defaultPaths = defaultPaths
+    }
 
     public func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore? = nil, fullScan: Bool = false) async throws -> [UsageRecord] {
         guard source.isEnabled else { throw AdapterError.sourceDisabled }
@@ -69,7 +81,7 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
             guard let tokenInfo = columnText(statement, 2) else { continue }
             let modelInfo = columnText(statement, 3)
             let gmtCreate = sqlite3_column_double(statement, 4)
-            if let record = LocalUsageParser.parseQoderMessageRow(id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, rawSource: "\(path):chat_message", pricing: pricing) {
+            if let record = LocalUsageParser.parseQoderMessageRow(tool: tool, id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, rawSource: "\(path):chat_message", pricing: pricing) {
                 records.append(record)
             }
         }

@@ -162,7 +162,7 @@ public enum LocalUsageParser {
     ///
     /// The per-message `id` (a unique primary key) is used as the dedupe id: several messages can
     /// share one `request_id`, so keying on `request_id` would collapse them and undercount tokens.
-    public static func parseQoderMessageRow(id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
+    public static func parseQoderMessageRow(tool: ToolKind = .qoder, id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
         guard let parsed = parseJSONObject(tokenInfo) else { return nil }
 
         // Pull raw counts out of one dictionary. `cachedSubset` is the OpenAI cache-read that lives
@@ -208,7 +208,7 @@ public enum LocalUsageParser {
         }
 
         let timestamp = Date(timeIntervalSince1970: normalizedEpoch(gmtCreate))
-        var record = UsageRecord(source: .qoder, accountId: sessionId, apiKeyHash: provider ?? "local-qoder", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: id, rawSource: rawSource)
+        var record = UsageRecord(source: tool, accountId: sessionId, apiKeyHash: provider ?? "local-\(tool.rawValue.lowercased())", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: id, rawSource: rawSource)
         // Cost may be a flat number on the usage/parsed object, or a nested {cost:{total:..}}
         // breakdown (the OpenClaw shape). Prefer a source-provided cost; otherwise estimate.
         let costKeys = ["cost", "costUSD", "cost_usd", "estimatedCost", "estimated_cost", "total_cost", "totalCost"]

@@ -162,7 +162,7 @@ public enum LocalUsageParser {
     ///
     /// The per-message `id` (a unique primary key) is used as the dedupe id: several messages can
     /// share one `request_id`, so keying on `request_id` would collapse them and undercount tokens.
-    public static func parseQoderMessageRow(tool: ToolKind = .qoder, id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
+    public static func parseQoderMessageRow(tool: ToolKind = .qoder, id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, fallbackModel: String? = nil, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
         guard let parsed = parseJSONObject(tokenInfo) else { return nil }
 
         // Pull raw counts out of one dictionary. `cachedSubset` is the OpenAI cache-read that lives
@@ -195,17 +195,23 @@ public enum LocalUsageParser {
         let output = t.output
         guard input + output + cache > 0 else { return nil }
 
-        // `model_info` may be a JSON object ({"model":..,"provider":..}), a bare model string, or a
-        // JSON-encoded scalar string ("claude-sonnet-4" with quotes) — normalise all three.
-        let model: String
-        let provider: String?
-        if let modelInfo, let modelObject = parseJSONObject(modelInfo) {
-            model = stringFromKeys(modelObject, ["model", "modelId", "modelID", "modelName", "model_name", "name", "id"]) ?? "qoder"
-            provider = stringFromKeys(modelObject, ["provider", "providerId", "providerID", "vendor", "source"])
-        } else {
-            model = bareModelString(modelInfo ?? "")
-            provider = nil
+        // Resolve the model with priority: model_info on the message (a JSON object, a bare string,
+        // or a JSON-encoded quoted string), then the per-request/session `fallbackModel` the adapter
+        // supplies, then "qoder". Qoder leaves model_info empty and records the real model (e.g.
+        // "qmodel_latest") in chat_record.extra.modelConfig.key / chat_session.preferred_model_info,
+        // which the adapter passes in as fallbackModel.
+        var provider: String? = nil
+        var modelFromInfo: String? = nil
+        if let modelInfo, !modelInfo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let modelObject = parseJSONObject(modelInfo) {
+                modelFromInfo = stringFromKeys(modelObject, ["model", "modelId", "modelID", "modelName", "model_name", "model_key", "modelKey", "key", "name", "id"])
+                provider = stringFromKeys(modelObject, ["provider", "providerId", "providerID", "vendor", "source"])
+            } else {
+                modelFromInfo = bareModelString(modelInfo)
+            }
         }
+        let fallback = fallbackModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = modelFromInfo ?? (fallback?.isEmpty == false ? fallback : nil) ?? "qoder"
 
         let timestamp = Date(timeIntervalSince1970: normalizedEpoch(gmtCreate))
         var record = UsageRecord(source: tool, accountId: sessionId, apiKeyHash: provider ?? "local-\(tool.rawValue.lowercased())", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: id, rawSource: rawSource)
@@ -222,18 +228,18 @@ public enum LocalUsageParser {
         return record
     }
 
-    /// Normalises `model_info` when it is not a JSON object: a JSON-encoded scalar string keeps its
-    /// surrounding quotes through a plain read, so decode that case; reject a stray object/array
-    /// fragment (not a usable model name) and fall back to "qoder".
-    private static func bareModelString(_ raw: String) -> String {
+    /// Normalises a non-JSON-object `model_info`: a JSON-encoded scalar string keeps its surrounding
+    /// quotes through a plain read, so decode that case; returns nil for an empty value or a stray
+    /// object/array fragment (not a usable model name) so the caller can fall back.
+    private static func bareModelString(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "qoder" }
+        if trimmed.isEmpty { return nil }
         if trimmed.hasPrefix("\""), let data = trimmed.data(using: .utf8),
            let decoded = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? String,
            !decoded.isEmpty {
             return decoded
         }
-        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return "qoder" }
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return nil }
         return trimmed
     }
 

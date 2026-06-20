@@ -43,6 +43,8 @@ struct TokenScopeCoreTestsRunner {
             ("qoderParserReadsNestedUsageAndBareModel", { try qoderParserReadsNestedUsageAndBareModel() }),
             ("qoderCNParserTagsRecordsAsQoderCN", { try qoderCNParserTagsRecordsAsQoderCN() }),
             ("qoderCNAdapterIsRegistered", { try qoderCNAdapterIsRegistered() }),
+            ("qoderParserUsesFallbackModelAndRealTokenShape", { try qoderParserUsesFallbackModelAndRealTokenShape() }),
+            ("qoderAdapterResolvesModelFromChatRecord", { try await qoderAdapterResolvesModelFromChatRecord() }),
             ("persistentRepositoryKeepsHistoricalRecords", { try await persistentRepositoryKeepsHistoricalRecords() }),
             ("pricingPersistsInSQLite", { try pricingPersistsInSQLite() }),
             ("pricingCanBeDeleted", { try pricingCanBeDeleted() }),
@@ -566,6 +568,59 @@ struct TokenScopeCoreTestsRunner {
         try expect(record?.cacheReadTokens == 30, "qoder flat-cost cache read mismatch")
         try expect(record?.totalTokens == 190, "qoder flat-cost total mismatch")
         try expect(abs(NSDecimalNumber(decimal: record?.estimatedCost ?? 0).doubleValue - 0.5) < 0.0001, "qoder nested cost.total mismatch")
+    }
+
+    static func qoderParserUsesFallbackModelAndRealTokenShape() throws {
+        // Real Qoder shape: model_info is empty, so the model comes from the adapter's fallback
+        // (chat_record.modelConfig.key). token_info uses prompt/completion/cached, where cached is a
+        // subset of prompt and must be subtracted (40502-36323=4179).
+        let tokenInfo = """
+        {"prompt_tokens":40502,"completion_tokens":328,"cached_tokens":36323,"max_input_tokens":0}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(id: "a1", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(record?.model == "qmodel_latest", "qoder fallback model not used when model_info empty")
+        try expect(record?.inputTokens == 4179, "qoder real-shape input (prompt - cached) mismatch")
+        try expect(record?.outputTokens == 328, "qoder real-shape output mismatch")
+        try expect(record?.cacheTokens == 36323, "qoder real-shape cache mismatch")
+        try expect(record?.cacheReadTokens == 36323, "qoder real-shape cache read mismatch")
+        try expect(record?.cacheCreationTokens == 0, "qoder real-shape cache write mismatch")
+        try expect(record?.totalTokens == 40830, "qoder real-shape total mismatch")
+        // model_info, when present, still wins over the fallback.
+        let withInfo = LocalUsageParser.parseQoderMessageRow(id: "a2", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model\":\"claude-x\"}", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(withInfo?.model == "claude-x", "model_info should win over fallback model")
+        // Qoder's own model_info shape {"model_key":...} is recognized directly (seen in real data).
+        let mk = LocalUsageParser.parseQoderMessageRow(id: "a3", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model_key\":\"qmodel_x\"}", gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(mk?.model == "qmodel_x", "model_info model_key not recognized")
+    }
+
+    static func qoderAdapterResolvesModelFromChatRecord() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-qoder-adapter-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        let db = try SQLiteTestDB(path: url.path)
+        try db.exec("""
+        CREATE TABLE chat_message (id TEXT PRIMARY KEY, session_id TEXT, request_id TEXT, role TEXT, token_info TEXT, model_info TEXT, gmt_create INTEGER);
+        CREATE TABLE chat_record (request_id TEXT PRIMARY KEY, extra TEXT, gmt_create INTEGER);
+        CREATE TABLE chat_session (session_id TEXT PRIMARY KEY, preferred_model_info TEXT, gmt_create INTEGER);
+        INSERT INTO chat_message (id, session_id, request_id, role, token_info, model_info, gmt_create)
+        VALUES ('m1','s1','r1','assistant','{"prompt_tokens":40502,"completion_tokens":328,"cached_tokens":36323}','', 1779493000000);
+        INSERT INTO chat_record (request_id, extra, gmt_create)
+        VALUES ('r1','{"modelConfig":{"key":"qmodel_latest"}}', 1779493000000);
+        INSERT INTO chat_session (session_id, preferred_model_info, gmt_create)
+        VALUES ('s1','{"preferred_model":"qmodel_session"}', 1779493000000);
+        """)
+        let adapter = QoderSQLiteUsageAdapter()
+        let source = UsageSource(tool: .qoder, name: "Qoder Test", accountId: "s1", apiKeyIdentity: "id", localLogPath: url.path)
+        let records = try await adapter.refresh(source: source, pricing: [], cursorStore: nil, fullScan: true)
+        try expect(records.count == 1, "qoder adapter did not read chat_message")
+        try expect(records[0].model == "qmodel_latest", "qoder adapter did not resolve model from chat_record.modelConfig.key")
+        try expect(records[0].inputTokens == 4179, "qoder adapter input mismatch")
+        try expect(records[0].cacheTokens == 36323, "qoder adapter cache mismatch")
+        try expect(records[0].totalTokens == 40830, "qoder adapter total mismatch")
+        try expect(records[0].source == .qoder, "qoder adapter source mismatch")
     }
 
     static func qoderCNParserTagsRecordsAsQoderCN() throws {

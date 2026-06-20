@@ -55,8 +55,14 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
         guard let db = ReadOnlySQLite.open(path) else { return [] }
         defer { sqlite3_close(db) }
 
+        // Qoder leaves chat_message.model_info empty; the real model lives in chat_record.extra
+        // (modelConfig.key, per request) and chat_session.preferred_model_info (per session). Build
+        // lookup maps up front, tolerating either table being absent in some Qoder versions.
+        let recordModels = modelMap(db: db, sql: "SELECT request_id, extra FROM chat_record", extract: Self.modelFromRecordExtra)
+        let sessionModels = modelMap(db: db, sql: "SELECT session_id, preferred_model_info FROM chat_session", extract: Self.modelFromSessionInfo)
+
         var sql = """
-        SELECT id, session_id, token_info, model_info, gmt_create
+        SELECT id, session_id, request_id, token_info, model_info, gmt_create
         FROM chat_message
         WHERE token_info IS NOT NULL AND token_info != ''
         """
@@ -78,14 +84,48 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
             // every scan and re-insert the same row as a duplicate within the 24h lookback window.
             guard let id = columnText(statement, 0), !id.isEmpty else { continue }
             let sessionId = columnText(statement, 1) ?? "Qoder Local"
-            guard let tokenInfo = columnText(statement, 2) else { continue }
-            let modelInfo = columnText(statement, 3)
-            let gmtCreate = sqlite3_column_double(statement, 4)
-            if let record = LocalUsageParser.parseQoderMessageRow(tool: tool, id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, rawSource: "\(path):chat_message", pricing: pricing) {
+            let requestId = columnText(statement, 2)
+            guard let tokenInfo = columnText(statement, 3) else { continue }
+            let modelInfo = columnText(statement, 4)
+            let gmtCreate = sqlite3_column_double(statement, 5)
+            let fallbackModel = (requestId.flatMap { recordModels[$0] }) ?? sessionModels[sessionId]
+            if let record = LocalUsageParser.parseQoderMessageRow(tool: tool, id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, fallbackModel: fallbackModel, rawSource: "\(path):chat_message", pricing: pricing) {
                 records.append(record)
             }
         }
         return records
+    }
+
+    /// Builds a `[key: model]` map from an auxiliary table, tolerating the table being absent
+    /// (`sqlite3_prepare_v2` fails → empty map). First non-empty value per key wins.
+    private func modelMap(db: OpaquePointer?, sql: String, extract: (String) -> String?) -> [String: String] {
+        var map: [String: String] = [:]
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return map }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let key = columnText(stmt, 0), !key.isEmpty,
+                  let raw = columnText(stmt, 1), let model = extract(raw) else { continue }
+            if map[key] == nil { map[key] = model }
+        }
+        return map
+    }
+
+    /// chat_record.extra → modelConfig.key (e.g. "qmodel_latest").
+    static func modelFromRecordExtra(_ raw: String) -> String? {
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelConfig = obj["modelConfig"] as? [String: Any],
+              let key = modelConfig["key"] as? String, !key.isEmpty else { return nil }
+        return key
+    }
+
+    /// chat_session.preferred_model_info → preferred_model.
+    static func modelFromSessionInfo(_ raw: String) -> String? {
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let model = obj["preferred_model"] as? String, !model.isEmpty else { return nil }
+        return model
     }
 
     private func columnText(_ statement: OpaquePointer?, _ index: Int32) -> String? {

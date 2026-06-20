@@ -282,6 +282,28 @@ struct TokenScopeTests {
         #expect(ToolKind.qoderCN.reportsCacheCreation)
     }
 
+    @Test func qoderParserUsesFallbackModelAndRealTokenShape() {
+        // Real Qoder shape: model_info is empty, so the model comes from the adapter's fallback
+        // (chat_record.modelConfig.key). cached_tokens is a subset of prompt_tokens (40502-36323).
+        let tokenInfo = """
+        {"prompt_tokens":40502,"completion_tokens":328,"cached_tokens":36323,"max_input_tokens":0}
+        """
+        let record = LocalUsageParser.parseQoderMessageRow(id: "a1", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        #expect(record?.model == "qmodel_latest")
+        #expect(record?.inputTokens == 4179)
+        #expect(record?.outputTokens == 328)
+        #expect(record?.cacheTokens == 36323)
+        #expect(record?.cacheReadTokens == 36323)
+        #expect(record?.cacheCreationTokens == 0)
+        #expect(record?.totalTokens == 40830)
+        // model_info, when present, still wins over the fallback.
+        let withInfo = LocalUsageParser.parseQoderMessageRow(id: "a2", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model\":\"claude-x\"}", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        #expect(withInfo?.model == "claude-x")
+        // Qoder's own model_info shape {"model_key":...} is recognized directly (seen in real data).
+        let mk = LocalUsageParser.parseQoderMessageRow(id: "a3", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model_key\":\"qmodel_x\"}", gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        #expect(mk?.model == "qmodel_x")
+    }
+
     @Test func qoderCNParserTagsRecordsAsQoderCN() {
         // The CN build reuses the same parser/schema; passing tool: .qoderCN must tag the record as
         // .qoderCN (distinct dedupe namespace) and use the CN fallback hash.

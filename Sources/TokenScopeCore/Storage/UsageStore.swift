@@ -77,7 +77,10 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// v3: record the cache-creation (write) portion of cache tokens separately.
     /// v4: Codex records carry the real model (e.g. gpt-5.5) read from the turn's `turn_context`
     ///     event instead of a hardcoded "codex".
-    static let parserVersion = 4
+    /// v5: Qoder / Qoder CN records carry the real model name (e.g. Qwen3.7-Max, GLM-5.2) resolved
+    ///     from chat_record / chat_session and the app bundle's alias catalog, instead of "qoder".
+    ///     Bumping triggers a one-time reparse so existing rows pick up the real model names.
+    static let parserVersion = 5
     static let parserVersionDefaultsKey = "TokenScopeParserVersion"
 
     /// Localizes an inline English/Chinese pair for the current `language`.

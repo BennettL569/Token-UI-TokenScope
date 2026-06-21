@@ -302,6 +302,17 @@ struct TokenScopeTests {
         // Qoder's own model_info shape {"model_key":...} is recognized directly (seen in real data).
         let mk = LocalUsageParser.parseQoderMessageRow(id: "a3", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model_key\":\"qmodel_x\"}", gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
         #expect(mk?.model == "qmodel_x")
+        // A supplied alias→friendly-name map turns the alias into the human-readable model name.
+        let mapped = LocalUsageParser.parseQoderMessageRow(id: "a4", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", modelAliases: ["qmodel_latest": "Qwen3.7-Max"], rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        #expect(mapped?.model == "Qwen3.7-Max")
+    }
+
+    @Test func qoderModelCatalogExtractsAliases() {
+        let sample = #"x,"modelSelector.item.qmodel_latest":"Qwen3.7-Max","modelSelector.item.qmodel_latest.description":"desc","modelSelector.item.gm51model":"GLM-5.2",y"#
+        let map = QoderModelCatalog.aliases(in: sample)
+        #expect(map["qmodel_latest"] == "Qwen3.7-Max")
+        #expect(map["gm51model"] == "GLM-5.2")
+        #expect(map["qmodel_latest.description"] == nil)
     }
 
     @Test func qoderCNParserTagsRecordsAsQoderCN() {

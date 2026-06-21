@@ -45,6 +45,7 @@ struct TokenScopeCoreTestsRunner {
             ("qoderCNAdapterIsRegistered", { try qoderCNAdapterIsRegistered() }),
             ("qoderParserUsesFallbackModelAndRealTokenShape", { try qoderParserUsesFallbackModelAndRealTokenShape() }),
             ("qoderAdapterResolvesModelFromChatRecord", { try await qoderAdapterResolvesModelFromChatRecord() }),
+            ("qoderModelCatalogExtractsAliases", { try qoderModelCatalogExtractsAliases() }),
             ("persistentRepositoryKeepsHistoricalRecords", { try await persistentRepositoryKeepsHistoricalRecords() }),
             ("pricingPersistsInSQLite", { try pricingPersistsInSQLite() }),
             ("pricingCanBeDeleted", { try pricingCanBeDeleted() }),
@@ -591,6 +592,9 @@ struct TokenScopeCoreTestsRunner {
         // Qoder's own model_info shape {"model_key":...} is recognized directly (seen in real data).
         let mk = LocalUsageParser.parseQoderMessageRow(id: "a3", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "{\"model_key\":\"qmodel_x\"}", gmtCreate: 1_777_000_000_000, rawSource: "/tmp/qoder.db:chat_message", pricing: [])
         try expect(mk?.model == "qmodel_x", "model_info model_key not recognized")
+        // A supplied alias→friendly-name map turns the alias into the human-readable model name.
+        let mapped = LocalUsageParser.parseQoderMessageRow(id: "a4", sessionId: "s1", tokenInfo: tokenInfo, modelInfo: "", gmtCreate: 1_777_000_000_000, fallbackModel: "qmodel_latest", modelAliases: ["qmodel_latest": "Qwen3.7-Max"], rawSource: "/tmp/qoder.db:chat_message", pricing: [])
+        try expect(mapped?.model == "Qwen3.7-Max", "alias should map to friendly model name")
     }
 
     static func qoderAdapterResolvesModelFromChatRecord() async throws {
@@ -612,15 +616,28 @@ struct TokenScopeCoreTestsRunner {
         INSERT INTO chat_session (session_id, preferred_model_info, gmt_create)
         VALUES ('s1','{"preferred_model":"qmodel_session"}', 1779493000000);
         """)
-        let adapter = QoderSQLiteUsageAdapter()
+        // Inject the alias→friendly-name map (instead of probing the installed Qoder.app) so the
+        // test is deterministic: it covers resolving the alias from chat_record AND mapping it.
+        let adapter = QoderSQLiteUsageAdapter(modelAliasOverride: ["qmodel_latest": "Qwen3.7-Max"])
         let source = UsageSource(tool: .qoder, name: "Qoder Test", accountId: "s1", apiKeyIdentity: "id", localLogPath: url.path)
         let records = try await adapter.refresh(source: source, pricing: [], cursorStore: nil, fullScan: true)
         try expect(records.count == 1, "qoder adapter did not read chat_message")
-        try expect(records[0].model == "qmodel_latest", "qoder adapter did not resolve model from chat_record.modelConfig.key")
+        try expect(records[0].model == "Qwen3.7-Max", "qoder adapter did not resolve+map model (chat_record alias → friendly name)")
         try expect(records[0].inputTokens == 4179, "qoder adapter input mismatch")
         try expect(records[0].cacheTokens == 36323, "qoder adapter cache mismatch")
         try expect(records[0].totalTokens == 40830, "qoder adapter total mismatch")
         try expect(records[0].source == .qoder, "qoder adapter source mismatch")
+    }
+
+    static func qoderModelCatalogExtractsAliases() throws {
+        // Mirrors the real NLS shape in Qoder's workbench bundle: modelSelector.item.<alias>":"<name>"
+        // with .description siblings that must be ignored.
+        let sample = #"x,"modelSelector.item.qmodel_latest":"Qwen3.7-Max","modelSelector.item.qmodel_latest.description":"desc","modelSelector.item.gm51model":"GLM-5.2","modelSelector.item.kmodel":"Kimi-K2.7-Code",y"#
+        let map = QoderModelCatalog.aliases(in: sample)
+        try expect(map["qmodel_latest"] == "Qwen3.7-Max", "catalog qmodel_latest mismatch")
+        try expect(map["gm51model"] == "GLM-5.2", "catalog gm51model mismatch")
+        try expect(map["kmodel"] == "Kimi-K2.7-Code", "catalog kmodel mismatch")
+        try expect(map["qmodel_latest.description"] == nil, "catalog must not capture .description keys")
     }
 
     static func qoderCNParserTagsRecordsAsQoderCN() throws {

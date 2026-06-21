@@ -18,6 +18,8 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
     public let capabilities: AdapterCapabilities = [.supportsLocalLogs, .supportsCostEstimation]
     private let defaultPaths: [String]
     private let incrementalLookbackSeconds: Double = 24 * 60 * 60
+    /// Injection point for tests: when set, used verbatim instead of probing the app bundle.
+    private let modelAliasOverride: [String: String]?
 
     /// Defaults to the international Qoder install. The CN build (`Qoder CN.app`) writes the same
     /// `chat_message` schema under `~/Library/Application Support/QoderCN/...`, so it is registered
@@ -25,12 +27,23 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
     public init(
         tool: ToolKind = .qoder,
         displayName: String = "Qoder SQLite",
-        defaultPaths: [String] = ["~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db"]
+        defaultPaths: [String] = ["~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db"],
+        modelAliasOverride: [String: String]? = nil
     ) {
         self.tool = tool
         self.id = tool.rawValue.lowercased() + "-sqlite"
         self.displayName = displayName
         self.defaultPaths = defaultPaths
+        self.modelAliasOverride = modelAliasOverride
+    }
+
+    /// App-bundle directory names to probe for the alias → friendly-name catalog (Qoder vs Qoder CN
+    /// ship different mappings for the same alias, e.g. gm51model → GLM-5.2 vs GLM-5.1).
+    private var appBundleNames: [String] {
+        switch tool {
+        case .qoderCN: return ["Qoder CN.app"]
+        default: return ["Qoder.app"]
+        }
     }
 
     public func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore? = nil, fullScan: Bool = false) async throws -> [UsageRecord] {
@@ -60,6 +73,8 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
         // lookup maps up front, tolerating either table being absent in some Qoder versions.
         let recordModels = modelMap(db: db, sql: "SELECT request_id, extra FROM chat_record", extract: Self.modelFromRecordExtra)
         let sessionModels = modelMap(db: db, sql: "SELECT session_id, preferred_model_info FROM chat_session", extract: Self.modelFromSessionInfo)
+        // Map Qoder's short model aliases to human-readable names from the app bundle (cached).
+        let modelAliases = modelAliasOverride ?? QoderModelCatalog.aliasMap(appBundleNames: appBundleNames)
 
         var sql = """
         SELECT id, session_id, request_id, token_info, model_info, gmt_create
@@ -89,7 +104,7 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
             let modelInfo = columnText(statement, 4)
             let gmtCreate = sqlite3_column_double(statement, 5)
             let fallbackModel = (requestId.flatMap { recordModels[$0] }) ?? sessionModels[sessionId]
-            if let record = LocalUsageParser.parseQoderMessageRow(tool: tool, id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, fallbackModel: fallbackModel, rawSource: "\(path):chat_message", pricing: pricing) {
+            if let record = LocalUsageParser.parseQoderMessageRow(tool: tool, id: id, sessionId: sessionId, tokenInfo: tokenInfo, modelInfo: modelInfo, gmtCreate: gmtCreate, fallbackModel: fallbackModel, modelAliases: modelAliases, rawSource: "\(path):chat_message", pricing: pricing) {
                 records.append(record)
             }
         }
@@ -131,5 +146,56 @@ public struct QoderSQLiteUsageAdapter: UsageAdapter {
     private func columnText(_ statement: OpaquePointer?, _ index: Int32) -> String? {
         guard let text = sqlite3_column_text(statement, index) else { return nil }
         return String(cString: text)
+    }
+}
+
+/// Resolves Qoder's short model aliases (qmodel_latest, gm51model, kmodel, …) to the human-readable
+/// names ("Qwen3.7-Max", "GLM-5.2", …). Those names are not in Qoder's database — they live in the
+/// app bundle's NLS strings as `modelSelector.item.<alias>":"<name>"`. The mapping differs between
+/// Qoder and Qoder CN and changes across app versions, so it is read from each app's bundle at
+/// refresh time (cached by file modification date) rather than hardcoded. A missing app or
+/// unreadable bundle yields an empty map, and callers then keep the raw alias.
+public enum QoderModelCatalog {
+    nonisolated(unsafe) private static var cache: [String: (mtime: TimeInterval, map: [String: String])] = [:]
+    private static let lock = NSLock()
+
+    /// The workbench bundle carrying the NLS strings, relative to an app bundle.
+    private static let bundleRelativePath = "Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js"
+
+    /// Probes /Applications then ~/Applications for the first matching app and returns its alias map.
+    public static func aliasMap(appBundleNames: [String]) -> [String: String] {
+        let bases = ["/Applications", (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
+        for name in appBundleNames {
+            for base in bases {
+                let js = "\(base)/\(name)/\(bundleRelativePath)"
+                if FileManager.default.fileExists(atPath: js) { return cachedMap(jsPath: js) }
+            }
+        }
+        return [:]
+    }
+
+    private static func cachedMap(jsPath: String) -> [String: String] {
+        let mtime = ((try? FileManager.default.attributesOfItem(atPath: jsPath)[.modificationDate]) as? Date)?.timeIntervalSince1970 ?? 0
+        lock.lock(); defer { lock.unlock() }
+        if let cached = cache[jsPath], cached.mtime == mtime { return cached.map }
+        let map = (try? String(contentsOfFile: jsPath, encoding: .utf8)).map(aliases(in:)) ?? [:]
+        cache[jsPath] = (mtime, map)
+        return map
+    }
+
+    /// Extracts `modelSelector.item.<alias>":"<name>"` pairs, ignoring the `.description` /
+    /// `.markdownDescription` variants (the alias capture stops at the dot, so those never match).
+    /// First value per alias wins (model names are language-neutral; only tier labels are localized).
+    public static func aliases(in content: String) -> [String: String] {
+        guard let regex = try? NSRegularExpression(pattern: #"modelSelector\.item\.([A-Za-z0-9_-]+)":"([^"]+)""#) else { return [:] }
+        let ns = content as NSString
+        var map: [String: String] = [:]
+        regex.enumerateMatches(in: content, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match, match.numberOfRanges == 3 else { return }
+            let alias = ns.substring(with: match.range(at: 1))
+            let name = ns.substring(with: match.range(at: 2))
+            if map[alias] == nil, !name.isEmpty { map[alias] = name }
+        }
+        return map
     }
 }

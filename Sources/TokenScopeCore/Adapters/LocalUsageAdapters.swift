@@ -162,7 +162,7 @@ public enum LocalUsageParser {
     ///
     /// The per-message `id` (a unique primary key) is used as the dedupe id: several messages can
     /// share one `request_id`, so keying on `request_id` would collapse them and undercount tokens.
-    public static func parseQoderMessageRow(tool: ToolKind = .qoder, id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, fallbackModel: String? = nil, rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
+    public static func parseQoderMessageRow(tool: ToolKind = .qoder, id: String, sessionId: String, tokenInfo: String, modelInfo: String?, gmtCreate: Double, fallbackModel: String? = nil, modelAliases: [String: String] = [:], rawSource: String, pricing: [ModelPricing]) -> UsageRecord? {
         guard let parsed = parseJSONObject(tokenInfo) else { return nil }
 
         // Pull raw counts out of one dictionary. `cachedSubset` is the OpenAI cache-read that lives
@@ -211,7 +211,10 @@ public enum LocalUsageParser {
             }
         }
         let fallback = fallbackModel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = modelFromInfo ?? (fallback?.isEmpty == false ? fallback : nil) ?? "qoder"
+        let resolvedAlias = modelFromInfo ?? (fallback?.isEmpty == false ? fallback : nil) ?? "qoder"
+        // Qoder stores short aliases (qmodel_latest, gm51model, …); map to the human-readable name
+        // ("Qwen3.7-Max", "GLM-5.2") supplied by the adapter from the app bundle, else keep the alias.
+        let model = modelAliases[resolvedAlias] ?? resolvedAlias
 
         let timestamp = Date(timeIntervalSince1970: normalizedEpoch(gmtCreate))
         var record = UsageRecord(source: tool, accountId: sessionId, apiKeyHash: provider ?? "local-\(tool.rawValue.lowercased())", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: id, rawSource: rawSource)

@@ -280,6 +280,24 @@ struct TokenScopeTests {
         #expect(ToolKind.openCode.reportsCacheCreation)
         #expect(ToolKind.qoder.reportsCacheCreation)
         #expect(ToolKind.qoderCN.reportsCacheCreation)
+        #expect(ToolKind.zCode.reportsCacheCreation)
+    }
+
+    @Test func zcodeParserReadsModelIoLine() {
+        // response.usage.inputTokens already includes cache, so it is split out (8606-8064=542);
+        // the model name is the real GLM-5.2.
+        let line = """
+        {"type":"model_io","requestId":"req-1","attempt":1,"sessionId":"sess-1","completedAt":"2026-06-21T18:38:46.993Z","model":{"modelId":"GLM-5.2","providerId":"builtin:bigmodel"},"response":{"modelId":"GLM-5.2","usage":{"inputTokens":8606,"outputTokens":95,"totalTokens":8701,"cacheReadTokens":8064,"cacheWriteTokens":0}}}
+        """
+        let record = LocalUsageParser.parseZCodeLine(line, filePath: "/tmp/zcode/model-io-x.jsonl", pricing: [])
+        #expect(record?.source == .zCode)
+        #expect(record?.model == "GLM-5.2")
+        #expect(record?.apiKeyHash == "builtin:bigmodel")
+        #expect(record?.inputTokens == 542)
+        #expect(record?.outputTokens == 95)
+        #expect(record?.cacheTokens == 8064)
+        #expect(record?.totalTokens == 8701)
+        #expect(LocalUsageParser.parseZCodeLine("{\"type\":\"other\"}", filePath: "x", pricing: []) == nil)
     }
 
     @Test func qoderParserUsesFallbackModelAndRealTokenShape() {

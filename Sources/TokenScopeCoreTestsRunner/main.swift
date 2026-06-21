@@ -32,6 +32,7 @@ struct TokenScopeCoreTestsRunner {
             ("updateServiceParsesGitHubRelease", { try updateServiceParsesGitHubRelease() }),
             ("refreshCursorsMigratesModelColumnOnOldDatabase", { try await refreshCursorsMigratesModelColumnOnOldDatabase() }),
             ("openClawParserReadsUsageLine", { try openClawParserReadsUsageLine() }),
+            ("zcodeParserReadsModelIoLine", { try zcodeParserReadsModelIoLine() }),
             ("hermesParserIncludesReasoningTokens", { try hermesParserIncludesReasoningTokens() }),
             ("hermesSQLiteAdapterUsesLatestMessageTimestamp", { try await hermesSQLiteAdapterUsesLatestMessageTimestamp() }),
             ("sqliteAdapterReadsWalModeDatabaseAfterWriterClosed", { try await sqliteAdapterReadsWalModeDatabaseAfterWriterClosed() }),
@@ -294,7 +295,7 @@ struct TokenScopeCoreTestsRunner {
         // creation is structurally 0; the dashboard uses this flag to explain that 0. Every other
         // tool can report cache writes.
         try expect(ToolKind.codeX.reportsCacheCreation == false, "Codex must not be marked as reporting cache creation")
-        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder, .qoderCN] {
+        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
             try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
         }
     }
@@ -376,6 +377,27 @@ struct TokenScopeCoreTestsRunner {
         try expect(LocalUsageParser.parseCodexLine(totalOnly, filePath: "/tmp/c.jsonl", pricing: []) == nil, "codex should skip a cumulative-only token_count")
         let withLast = #"{"timestamp":"2026-06-13T16:45:40.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
         try expect(LocalUsageParser.parseCodexLine(withLast, filePath: "/tmp/c.jsonl", pricing: []) != nil, "codex should count a per-event last_token_usage")
+    }
+
+    static func zcodeParserReadsModelIoLine() throws {
+        // Real ZCode shape: response.usage.inputTokens already includes cache read+write, so it must
+        // be split out (8606 - 8064 = 542). The model name is the real one (GLM-5.2), no alias.
+        let line = """
+        {"type":"model_io","requestId":"req-1","attempt":1,"sessionId":"sess-1","completedAt":"2026-06-21T18:38:46.993Z","model":{"modelId":"GLM-5.2","providerId":"builtin:bigmodel"},"response":{"modelId":"GLM-5.2","usage":{"inputTokens":8606,"outputTokens":95,"totalTokens":8701,"cacheReadTokens":8064,"cacheWriteTokens":0}}}
+        """
+        let record = LocalUsageParser.parseZCodeLine(line, filePath: "/tmp/zcode/model-io-x.jsonl", pricing: [])
+        try expect(record?.source == .zCode, "zcode source mismatch")
+        try expect(record?.model == "GLM-5.2", "zcode model mismatch")
+        try expect(record?.accountId == "sess-1", "zcode session mismatch")
+        try expect(record?.apiKeyHash == "builtin:bigmodel", "zcode provider mismatch")
+        try expect(record?.inputTokens == 542, "zcode input must exclude cache (8606-8064)")
+        try expect(record?.outputTokens == 95, "zcode output mismatch")
+        try expect(record?.cacheTokens == 8064, "zcode cache mismatch")
+        try expect(record?.cacheReadTokens == 8064, "zcode cache read mismatch")
+        try expect(record?.cacheCreationTokens == 0, "zcode cache write mismatch")
+        try expect(record?.totalTokens == 8701, "zcode total mismatch")
+        // Non-model_io lines produce nothing.
+        try expect(LocalUsageParser.parseZCodeLine("{\"type\":\"other\"}", filePath: "x", pricing: []) == nil, "zcode must ignore non-model_io")
     }
 
     static func openClawParserReadsUsageLine() throws {

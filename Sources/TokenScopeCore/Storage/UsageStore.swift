@@ -80,7 +80,8 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// v5: Qoder / Qoder CN records carry the real model name (e.g. Qwen3.7-Max, GLM-5.2) resolved
     ///     from chat_record / chat_session and the app bundle's alias catalog, instead of "qoder".
     ///     Bumping triggers a one-time reparse so existing rows pick up the real model names.
-    static let parserVersion = 5
+    /// v6: ZCode added as a tool; bumping reparses so its rollout usage is picked up on launch.
+    static let parserVersion = 6
     static let parserVersionDefaultsKey = "TokenScopeParserVersion"
 
     /// Localizes an inline English/Chinese pair for the current `language`.
@@ -507,7 +508,9 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
             ModelPricing(tool: .qoder, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
             ModelPricing(tool: .qoderCN, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
             ModelPricing(tool: .qoderCN, model: "qmodel_latest", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .qoderCN, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3)
+            ModelPricing(tool: .qoderCN, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+            ModelPricing(tool: .zCode, model: "GLM-5.2", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11),
+            ModelPricing(tool: .zCode, model: "GLM-5", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11)
         ]
     }
 }

@@ -95,6 +95,7 @@ public struct PlaceholderUsageAdapter: UsageAdapter {
         case .openClaw: return ["openclaw-agent", "qwen3-coder"]
         case .openCode: return ["opencode", "claude-sonnet-4"]
         case .qoder, .qoderCN: return ["qoder", "claude-sonnet-4"]
+        case .zCode: return ["GLM-5.2", "GLM-5"]
         }
     }
 }
@@ -145,6 +146,12 @@ public struct AdapterRegistry: Sendable {
                 tool: .qoderCN,
                 displayName: "Qoder CN SQLite",
                 defaultPaths: ["~/Library/Application Support/QoderCN/SharedClientCache/cache/db/local.db"]
+            ),
+            .zCode: LocalJSONLUsageAdapter(
+                tool: .zCode,
+                displayName: "ZCode Local Rollout",
+                defaultGlobPatterns: ["~/.zcode/cli/rollout/*.jsonl"],
+                parser: LocalUsageParser.parseZCodeLine
             )
         ]
     }

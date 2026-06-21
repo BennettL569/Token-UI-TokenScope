@@ -147,6 +147,36 @@ public enum LocalUsageParser {
         return record
     }
 
+    /// ZCode (a Codex-style coding-agent CLI) writes one `model_io` line per model request to
+    /// `~/.zcode/cli/rollout/model-io-*.jsonl`. Each line carries `response.usage` and the real
+    /// model name in `model.modelId` (e.g. "GLM-5.2"), so no alias mapping is needed. `inputTokens`
+    /// already includes cache read+write (totalTokens == inputTokens + outputTokens), so split the
+    /// cache out of input into the app's disjoint buckets — otherwise cache is double-counted.
+    public static func parseZCodeLine(_ line: String, filePath: String, pricing: [ModelPricing]) -> UsageRecord? {
+        // Cheap substring gate before the (large) JSON parse: only model_io lines carry usage.
+        guard line.contains("model_io"), line.contains("usage") else { return nil }
+        guard let object = parseJSONObject(line),
+              string(object["type"]) == "model_io",
+              let response = object["response"] as? [String: Any],
+              let usage = response["usage"] as? [String: Any] else { return nil }
+        let cacheRead = int(usage["cacheReadTokens"])
+        let cacheWrite = int(usage["cacheWriteTokens"])
+        let cache = cacheRead + cacheWrite
+        let output = int(usage["outputTokens"])
+        let input = max(0, int(usage["inputTokens"]) - cache)
+        guard input + output + cache > 0 else { return nil }
+        let modelDict = object["model"] as? [String: Any]
+        let model = string(modelDict?["modelId"]) ?? string(response["modelId"]) ?? "zcode"
+        let provider = string(modelDict?["providerId"])
+        let timestamp = parseDate(string(object["completedAt"]) ?? string(object["startedAt"])) ?? Date()
+        // Key on requestId + attempt: a retried request reuses the requestId but is a separate billed
+        // call, so the attempt keeps them from collapsing into one dedupe key.
+        let requestId = string(object["requestId"]).map { "\($0)#\(int(object["attempt"]))" }
+        var record = UsageRecord(source: .zCode, accountId: string(object["sessionId"]) ?? "ZCode Local", apiKeyHash: provider ?? "local-zcode", model: model, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, cacheCreationTokens: cacheWrite, requestId: requestId, rawSource: filePath)
+        record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
+        return record
+    }
+
     /// Qoder (Alibaba's AI IDE) stores one row per chat message in its `chat_message` table; token
     /// usage is a JSON blob in `token_info` and the model in `model_info`. The exact field names
     /// inside those blobs are not yet pinned down from real data (the table is empty until Qoder is

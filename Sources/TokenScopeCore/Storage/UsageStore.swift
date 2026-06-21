@@ -80,9 +80,15 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// v5: Qoder / Qoder CN records carry the real model name (e.g. Qwen3.7-Max, GLM-5.2) resolved
     ///     from chat_record / chat_session and the app bundle's alias catalog, instead of "qoder".
     ///     Bumping triggers a one-time reparse so existing rows pick up the real model names.
-    /// v6: ZCode added as a tool; bumping reparses so its rollout usage is picked up on launch.
-    static let parserVersion = 6
+    ///
+    /// Reserve a parser bump for changes to how EXISTING data is parsed — it runs a full rebuild,
+    /// which is heavy on large logs. A brand-new tool does NOT need one: it is picked up by the
+    /// cheap incremental sync below (see `knownToolsDefaultsKey`).
+    static let parserVersion = 5
     static let parserVersionDefaultsKey = "TokenScopeParserVersion"
+    /// Tracks which tools have been seen so a newly added tool (e.g. ZCode) is picked up with a
+    /// cheap incremental sync on launch, instead of the heavy full rebuild a parser bump performs.
+    static let knownToolsDefaultsKey = "TokenScopeKnownTools"
 
     /// Localizes an inline English/Chinese pair for the current `language`.
     public func L(_ english: String, _ chinese: String) -> String {
@@ -178,6 +184,8 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     @MainActor
     public func refreshOnLaunch() async {
         let storedParserVersion = UserDefaults.standard.integer(forKey: Self.parserVersionDefaultsKey)
+        let knownTools = Set(UserDefaults.standard.stringArray(forKey: Self.knownToolsDefaultsKey) ?? [])
+        let currentTools = Set(ToolKind.allCases.map(\.rawValue))
         if storedParserVersion < Self.parserVersion {
             // A parser-version bump can newly recognize models that didn't exist before (Codex
             // gpt-5.5 / gpt-5.4 / gpt-5.4-mini, surfaced once the real model replaced the hardcoded
@@ -190,7 +198,13 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(Self.parserVersion, forKey: Self.parserVersionDefaultsKey)
         } else if records.isEmpty {
             await refreshAll()
+        } else if !currentTools.subtracting(knownTools).isEmpty {
+            // A newly added tool (e.g. ZCode) has no data yet. Pick it up with a cheap incremental
+            // sync rather than a full rebuild — the new tool has no cursor so it reads its own logs,
+            // while existing tools resume from their cursors and read almost nothing.
+            await refreshAll()
         }
+        UserDefaults.standard.set(Array(currentTools), forKey: Self.knownToolsDefaultsKey)
     }
 
     /// `(tool, model)` pairs first recognized in parser version 4. Deliberately narrow: re-seeding

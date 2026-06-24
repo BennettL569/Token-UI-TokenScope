@@ -87,7 +87,13 @@ struct UsageDetailView: View {
                     TableColumn(lang.select("Input", "输入")) { Text("\($0.inputTokens)").monospacedDigit() }
                     TableColumn(lang.select("Output", "输出")) { Text("\($0.outputTokens)").monospacedDigit() }
                     TableColumn(lang.select("Cache Read", "缓存读取")) { Text("\($0.cacheReadTokens)").monospacedDigit().foregroundStyle($0.cacheReadTokens > 0 ? Color.neonBlue : Color.scopeTextMuted) }
-                    TableColumn(lang.select("Cache Create", "缓存创建")) { Text("\($0.cacheCreationTokens)").monospacedDigit().foregroundStyle($0.cacheCreationTokens > 0 ? Color.neonPurple : Color.scopeTextMuted) }
+                    TableColumn(lang.select("Cache Create", "缓存创建")) { record in
+                        if record.showsCacheCreation {
+                            Text("\(record.cacheCreationTokens)").monospacedDigit().foregroundStyle(record.cacheCreationTokens > 0 ? Color.neonPurple : Color.scopeTextMuted)
+                        } else {
+                            Text(verbatim: "N/A").monospacedDigit().foregroundStyle(Color.scopeTextMuted)
+                        }
+                    }
                     TableColumn(lang.select("Total", "总量")) { Text("\($0.totalTokens)").monospacedDigit() }
                     TableColumn(lang.select("Cost", "费用")) { Text(DecimalFormatting.currency($0.estimatedCost)).monospacedDigit() }
                 }

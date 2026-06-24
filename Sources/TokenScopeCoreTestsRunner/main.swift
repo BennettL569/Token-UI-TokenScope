@@ -27,7 +27,8 @@ struct TokenScopeCoreTestsRunner {
             ("codexParserExtractsModelFromTurnContext", { try codexParserExtractsModelFromTurnContext() }),
             ("codexAdapterThreadsModelAndSurvivesIncrementalResume", { try await codexAdapterThreadsModelAndSurvivesIncrementalResume() }),
             ("pricingMergeSeedsNewModelsWithoutResurrectingDeleted", { try pricingMergeSeedsNewModelsWithoutResurrectingDeleted() }),
-            ("toolKindReportsCacheCreationOnlyForWritingTools", { try toolKindReportsCacheCreationOnlyForWritingTools() }),
+            ("toolKindReportsCacheCreationOnlyForClaudeCode", { try toolKindReportsCacheCreationOnlyForClaudeCode() }),
+            ("recordShowsCacheCreationOnlyForClaudeOrPositive", { try recordShowsCacheCreationOnlyForClaudeOrPositive() }),
             ("updateServiceComparesVersionsNumerically", { try updateServiceComparesVersionsNumerically() }),
             ("updateServiceParsesGitHubRelease", { try updateServiceParsesGitHubRelease() }),
             ("refreshCursorsMigratesModelColumnOnOldDatabase", { try await refreshCursorsMigratesModelColumnOnOldDatabase() }),
@@ -290,13 +291,28 @@ struct TokenScopeCoreTestsRunner {
         try expect(again.count == merged.count, "merge is not idempotent")
     }
 
-    static func toolKindReportsCacheCreationOnlyForWritingTools() throws {
-        // Codex follows OpenAI accounting (cache reads only, no cache-write tokens), so its cache
-        // creation is structurally 0; the dashboard uses this flag to explain that 0. Every other
-        // tool can report cache writes.
-        try expect(ToolKind.codeX.reportsCacheCreation == false, "Codex must not be marked as reporting cache creation")
-        for tool in [ToolKind.claudeCode, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
-            try expect(tool.reportsCacheCreation, "\(tool.rawValue) should report cache creation")
+    static func toolKindReportsCacheCreationOnlyForClaudeCode() throws {
+        // Only Claude Code (Anthropic) reports cache creation as a distinct billed category; every
+        // other tool's cache-write is absent or left 0 by its provider, so the UI shows N/A there.
+        try expect(ToolKind.claudeCode.reportsCacheCreation, "Claude Code must report cache creation")
+        for tool in [ToolKind.codeX, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
+            try expect(tool.reportsCacheCreation == false, "\(tool.rawValue) must not be marked as reporting cache creation")
+        }
+    }
+
+    static func recordShowsCacheCreationOnlyForClaudeOrPositive() throws {
+        // The Usage table renders cache creation as "N/A" instead of a misleading 0 for every tool
+        // except Claude Code: those tools emit cache reads with no matching writes, so a 0 means
+        // "not reported". Claude's value is always shown (it reports cache creation accurately), and
+        // a genuine non-zero from any tool is always shown.
+        func record(_ tool: ToolKind, cacheCreation: Int) -> UsageRecord {
+            UsageRecord(source: tool, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: max(cacheCreation, 10), cacheCreationTokens: cacheCreation, rawSource: "r")
+        }
+        try expect(record(.claudeCode, cacheCreation: 0).showsCacheCreation, "Claude Code shows its cache creation even when 0")
+        try expect(record(.claudeCode, cacheCreation: 5).showsCacheCreation, "Claude Code shows a non-zero cache creation")
+        for tool in [ToolKind.codeX, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
+            try expect(record(tool, cacheCreation: 0).showsCacheCreation == false, "\(tool.rawValue) with 0 cache creation must read N/A")
+            try expect(record(tool, cacheCreation: 7).showsCacheCreation, "\(tool.rawValue) with real cache creation must still show the number")
         }
     }
 

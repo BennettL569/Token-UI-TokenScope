@@ -12,15 +12,14 @@ public enum ToolKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
-    /// Whether this tool's source data reports cache *creation* (write) tokens. Codex follows
-    /// OpenAI accounting, which only reports `cached_input_tokens` (cache reads) and has no
-    /// cache-write concept, so its "cache creation" is always 0 — the UI uses this to explain that
-    /// 0 rather than letting it look like a bug. Every other tracked tool can report cache writes.
+    /// Whether this tool reports cache *creation* (write) tokens as a distinct, billed category.
+    /// Only Claude Code (Anthropic's API) does: OpenAI-style providers (Codex, Qoder) report cache
+    /// *reads* only and have no cache-write concept, and the tools that do carry a cache-write field
+    /// (Hermes, OpenCode, ZCode, …) are fed by providers that leave it 0. So for every tool except
+    /// Claude Code a 0 means "not reported", not "measured zero" — the UI shows "N/A" instead of a
+    /// misleading 0. A genuine non-zero is still shown (see `UsageRecord.showsCacheCreation`).
     public var reportsCacheCreation: Bool {
-        switch self {
-        case .codeX: return false
-        case .claudeCode, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode: return true
-        }
+        self == .claudeCode
     }
 }
 
@@ -108,6 +107,14 @@ public struct UsageRecord: Identifiable, Codable, Hashable, Sendable {
 
     /// Cache read tokens = total cache minus the cache-creation portion.
     public var cacheReadTokens: Int { max(0, cacheTokens - cacheCreationTokens) }
+
+    /// Whether the cache-creation count is meaningful enough to render as a number rather than
+    /// "N/A". Tools that report cache creation (Claude Code) always show their value, including a
+    /// genuine 0; for every other tool a 0 means "not reported" and renders as "N/A", while a real
+    /// non-zero (e.g. a future Anthropic-backed run routed through another tool) is still shown.
+    public var showsCacheCreation: Bool {
+        source.reportsCacheCreation || cacheCreationTokens > 0
+    }
 
     public init(
         id: UUID = UUID(),

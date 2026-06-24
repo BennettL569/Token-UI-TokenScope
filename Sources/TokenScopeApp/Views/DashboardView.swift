@@ -73,14 +73,16 @@ struct DashboardView: View {
 
     private var metrics: some View {
         let snapshot = store.dashboardSnapshot
-        // When filtered to a tool that doesn't report cache-creation (write) tokens — Codex follows
-        // OpenAI accounting, which only reports cache reads — the Cache Creation card is structurally
-        // 0. Explain that so it doesn't read as a bug.
+        // Cache creation is only meaningful for Claude Code (Anthropic bills cache writes as a
+        // distinct category). When filtered to any other single tool with no cache creation, show
+        // "N/A" instead of a misleading 0 — matching the Usage table — and explain why.
+        let cacheCreationUnavailable = (store.selectedTool.map { !$0.reportsCacheCreation } ?? false)
+            && snapshot.selected.cacheCreationTokens == 0
         let cacheCreationHint: String? = {
-            guard let tool = store.selectedTool, !tool.reportsCacheCreation else { return nil }
+            guard cacheCreationUnavailable, let tool = store.selectedTool else { return nil }
             return lang.select(
-                "\(tool.rawValue) reports cache reads only — it has no cache-creation (write) tokens, so this is always 0.",
-                "\(tool.rawValue) 只上报缓存读取，没有缓存创建（写入）token，因此这里始终为 0。")
+                "Only Claude Code reports cache-creation (write) tokens separately; \(tool.rawValue) doesn't, so this shows N/A.",
+                "仅 Claude Code 会单独上报缓存创建（写入）token，\(tool.rawValue) 不区分，因此显示 N/A。")
         }()
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 14) {
             MetricCard(title: lang.select("Today Tokens", "今日 Tokens"), value: formatTokens(snapshot.today.totalTokens), subtitle: DecimalFormatting.currency(snapshot.today.estimatedCost), accent: .neonCyan)
@@ -88,7 +90,7 @@ struct DashboardView: View {
             MetricCard(title: lang.select("This Month Tokens", "本月 Tokens"), value: formatTokens(snapshot.month.totalTokens), subtitle: lang.select("Cache hit \(formatPercent(snapshot.month.cacheHitRate))", "缓存命中 \(formatPercent(snapshot.month.cacheHitRate))"), accent: .neonBlue)
             MetricCard(title: lang.select("Selected Range Tokens", "所选范围 Tokens"), value: formatTokens(snapshot.selected.totalTokens), subtitle: selectedRangeSubtitle(usage: snapshot.selected), accent: .primary)
             MetricCard(title: lang.select("Requests", "请求数"), value: formatTokens(snapshot.selected.requestCount), subtitle: lang.select("All \(formatTokens(snapshot.all.requestCount)) requests", "全部 \(formatTokens(snapshot.all.requestCount)) 次"), accent: .neonPurple)
-            MetricCard(title: lang.select("Cache Creation", "缓存创建"), value: formatTokens(snapshot.selected.cacheCreationTokens), subtitle: lang.select("Cache read \(formatTokens(snapshot.selected.cacheReadTokens))", "缓存读取 \(formatTokens(snapshot.selected.cacheReadTokens))"), accent: .neonBlue, hint: cacheCreationHint)
+            MetricCard(title: lang.select("Cache Creation", "缓存创建"), value: cacheCreationUnavailable ? "N/A" : formatTokens(snapshot.selected.cacheCreationTokens), subtitle: lang.select("Cache read \(formatTokens(snapshot.selected.cacheReadTokens))", "缓存读取 \(formatTokens(snapshot.selected.cacheReadTokens))"), accent: .neonBlue, hint: cacheCreationHint)
             MetricCard(title: lang.select("Cache Hit", "缓存命中"), value: formatPercent(snapshot.selected.cacheHitRate), subtitle: lang.select("Selected-range cache \(formatTokens(snapshot.selected.cacheTokens)) tokens", "所选范围缓存 \(formatTokens(snapshot.selected.cacheTokens)) tokens"), accent: .neonBlue)
             MetricCard(title: lang.select("All Tokens", "全部 Tokens"), value: formatTokens(snapshot.all.totalTokens), subtitle: lang.select("Cache \(formatTokens(snapshot.all.cacheTokens)) · hit \(formatPercent(snapshot.all.cacheHitRate))", "缓存 \(formatTokens(snapshot.all.cacheTokens)) · 命中 \(formatPercent(snapshot.all.cacheHitRate))"), accent: .primary)
         }

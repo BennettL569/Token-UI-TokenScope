@@ -270,17 +270,32 @@ struct TokenScopeTests {
         #expect(again.count == merged.count)
     }
 
-    @Test func toolKindReportsCacheCreationOnlyForWritingTools() {
-        // Codex follows OpenAI accounting (cache reads only, no cache-write tokens), so its cache
-        // creation is structurally 0; the dashboard uses this flag to explain that 0.
-        #expect(ToolKind.codeX.reportsCacheCreation == false)
+    @Test func toolKindReportsCacheCreationOnlyForClaudeCode() {
+        // Only Claude Code (Anthropic) reports cache creation as a distinct billed category; every
+        // other tool's cache-write is absent or left 0 by its provider, so the UI shows N/A there.
         #expect(ToolKind.claudeCode.reportsCacheCreation)
-        #expect(ToolKind.hermes.reportsCacheCreation)
-        #expect(ToolKind.openClaw.reportsCacheCreation)
-        #expect(ToolKind.openCode.reportsCacheCreation)
-        #expect(ToolKind.qoder.reportsCacheCreation)
-        #expect(ToolKind.qoderCN.reportsCacheCreation)
-        #expect(ToolKind.zCode.reportsCacheCreation)
+        #expect(ToolKind.codeX.reportsCacheCreation == false)
+        #expect(ToolKind.hermes.reportsCacheCreation == false)
+        #expect(ToolKind.openClaw.reportsCacheCreation == false)
+        #expect(ToolKind.openCode.reportsCacheCreation == false)
+        #expect(ToolKind.qoder.reportsCacheCreation == false)
+        #expect(ToolKind.qoderCN.reportsCacheCreation == false)
+        #expect(ToolKind.zCode.reportsCacheCreation == false)
+    }
+
+    @Test func recordShowsCacheCreationOnlyForClaudeOrPositive() {
+        // The Usage table renders cache creation as "N/A" instead of a misleading 0 for every tool
+        // except Claude Code: those tools emit cache reads with no matching writes, so a 0 means
+        // "not reported". Claude's value is always shown, and a genuine non-zero from any tool is too.
+        func record(_ tool: ToolKind, cacheCreation: Int) -> UsageRecord {
+            UsageRecord(source: tool, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: max(cacheCreation, 10), cacheCreationTokens: cacheCreation, rawSource: "r")
+        }
+        #expect(record(.claudeCode, cacheCreation: 0).showsCacheCreation)
+        #expect(record(.claudeCode, cacheCreation: 5).showsCacheCreation)
+        for tool in [ToolKind.codeX, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
+            #expect(record(tool, cacheCreation: 0).showsCacheCreation == false)
+            #expect(record(tool, cacheCreation: 7).showsCacheCreation)
+        }
     }
 
     @Test func zcodeParserReadsModelIoLine() {

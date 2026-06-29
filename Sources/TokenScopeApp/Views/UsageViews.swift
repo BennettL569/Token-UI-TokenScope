@@ -4,6 +4,12 @@ import TokenScopeCore
 struct ToolDistributionView: View {
     @Environment(\.appLanguage) private var lang
     let groups: [ToolKind: AggregatedUsage]
+    /// When a search / tool filter is hiding all rows, this describes it (e.g. `搜索 “zhang”`) so the
+    /// empty state can say "nothing matches the filter" instead of the misleading "no data" message.
+    /// `nil` means no filter is active, so an empty `groups` really is "no data in this range".
+    var activeFilterSummary: String? = nil
+    /// Clears the active search / tool filter; shown as a one-click button in the filtered empty state.
+    var onClearFilter: (() -> Void)? = nil
     private static let percentFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .percent
@@ -18,7 +24,21 @@ struct ToolDistributionView: View {
                 Text(lang.select("Tool Distribution", "工具分布"))
                     .font(.headline)
                 if groups.isEmpty {
-                    ContentUnavailableView(lang.select("No tool stats yet", "暂无工具统计"), systemImage: "square.stack.3d.up.slash")
+                    if let activeFilterSummary {
+                        ContentUnavailableView {
+                            Label(lang.select("No tools match the current filter", "没有符合当前筛选的工具用量"), systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text(activeFilterSummary)
+                        } actions: {
+                            if let onClearFilter {
+                                Button(lang.select("Clear filter", "清除筛选")) { onClearFilter() }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.neonBlue)
+                            }
+                        }
+                    } else {
+                        ContentUnavailableView(lang.select("No tool stats yet", "暂无工具统计"), systemImage: "square.stack.3d.up.slash")
+                    }
                 } else {
                     ForEach(ToolKind.allCases) { tool in
                         let value = groups[tool]?.totalTokens ?? 0
@@ -26,9 +46,13 @@ struct ToolDistributionView: View {
                         let requests = groups[tool]?.requestCount ?? 0
                         let cachePercent = Self.percentFormatter.string(from: NSNumber(value: cacheHitRate)) ?? "0%"
                         HStack {
-                            Text(tool.rawValue).frame(width: 110, alignment: .leading)
+                            HStack(spacing: 6) {
+                                Circle().fill(tool.displayColor).frame(width: 9, height: 9)
+                                Text(tool.rawValue)
+                            }
+                            .frame(width: 110, alignment: .leading)
                             ProgressView(value: Double(value), total: Double(max(groups.values.map(\.totalTokens).max() ?? 1, 1)))
-                                .tint(tool == .claudeCode ? .neonCyan : tool == .codeX ? .neonBlue : tool == .hermes ? .neonPurple : .white)
+                                .tint(tool.displayColor)
                             VStack(alignment: .trailing, spacing: 2) {
                                 Text("\(value)").font(.caption.monospacedDigit())
                                 Text(lang.select("Cache \(cachePercent) · \(requests) req", "缓存 \(cachePercent) · \(requests) 次"))

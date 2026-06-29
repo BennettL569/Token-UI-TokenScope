@@ -54,6 +54,8 @@ struct TokenScopeCoreTestsRunner {
             ("budgetsPersistInSQLite", { try budgetsPersistInSQLite() }),
             ("budgetProgressCanUseTokenOrCostMode", { try budgetProgressCanUseTokenOrCostMode() }),
             ("dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates", { try dashboardSnapshotFiltersBySearchAndToolWithStableBaseAggregates() }),
+            ("refreshIntervalProvidesOrderedCadences", { try refreshIntervalProvidesOrderedCadences() }),
+            ("clearLocalDataNoOpsWhileRefreshing", { try await clearLocalDataNoOpsWhileRefreshing() }),
         ]
         for check in checks {
             do {
@@ -852,6 +854,46 @@ struct TokenScopeCoreTestsRunner {
         let rule = BudgetRule(period: .daily, tokenLimit: 100, costLimit: 200)
         try expect(abs(BudgetEngine.progress(usage: usage, rule: rule, mode: .tokens) - 0.5) < 0.0001, "token budget progress mismatch")
         try expect(abs(BudgetEngine.progress(usage: usage, rule: rule, mode: .cost) - 0.4) < 0.0001, "cost budget progress mismatch")
+    }
+
+    static func refreshIntervalProvidesOrderedCadences() throws {
+        // Nine auto-refresh cadences, declared 1h → real-time so the settings picker lists them in
+        // that order. rawValues are stable preference keys (persisted to UserDefaults) and must
+        // round-trip; real-time is the smallest (most frequent) positive cadence.
+        try expect(RefreshInterval.allCases.count == 9, "expected 9 refresh intervals")
+        try expect(RefreshInterval.allCases.first == .oneHour, "picker order should start at 1h")
+        try expect(RefreshInterval.allCases.last == .realtime, "picker order should end at real-time")
+        try expect(RefreshInterval.oneHour.seconds == 3600, "1h cadence mismatch")
+        try expect(RefreshInterval.oneMinute.seconds == 60, "1m cadence mismatch")
+        try expect(RefreshInterval.fiveSeconds.seconds == 5, "5s cadence mismatch")
+        try expect(RefreshInterval.realtime.seconds > 0, "real-time cadence must be positive")
+        try expect(RefreshInterval.allCases.map(\.seconds).min() == RefreshInterval.realtime.seconds, "real-time should be the smallest cadence")
+        try expect(RefreshInterval(rawValue: "30m") == .thirtyMinutes, "rawValue round-trip mismatch")
+        try expect(RefreshInterval.realtime.displayName(.english) == "Real-time", "english real-time label mismatch")
+        try expect(RefreshInterval.realtime.displayName(.chinese) == "实时刷新", "chinese real-time label mismatch")
+    }
+
+    static func clearLocalDataNoOpsWhileRefreshing() async throws {
+        // The reentrancy gate (added when auto-refresh started calling refreshAll on a timer) must
+        // stop clearLocalData from running while a refresh is in flight — otherwise a concurrent
+        // refresh could re-upsert rows into the just-cleared store. With the gate held it is a
+        // no-op; once released it clears.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-clearguard-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        let repo = PersistentUsageRepository(dbURL: url)
+        repo.upsert([UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: "guard-1", rawSource: "r")])
+        let store = UsageStore(repository: repo)
+        try expect(store.records.count == 1, "setup: store should load the seeded record")
+        store.isRefreshing = true
+        await store.clearLocalData()
+        try expect(store.records.count == 1, "clearLocalData must no-op while a refresh is in flight")
+        store.isRefreshing = false
+        await store.clearLocalData()
+        try expect(store.records.isEmpty, "clearLocalData must clear once the gate is released")
     }
 
 }

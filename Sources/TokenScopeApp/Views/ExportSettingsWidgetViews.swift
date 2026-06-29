@@ -85,6 +85,8 @@ struct SettingsView: View {
                         .disabled(store.isRefreshing)
                     }
                     Divider()
+                    autoRefreshSection
+                    Divider()
                     updatesSection
                     Divider()
                     Label(lang.select("No statistics are uploaded by default; all aggregation, import and export happen on this machine.", "默认不上传任何统计数据；所有聚合、导入、导出都在本机完成。"), systemImage: "lock.shield")
@@ -102,6 +104,28 @@ struct SettingsView: View {
         .confirmationDialog(lang.select("Re-read all token data from scratch? This clears the current stats and rescans every configured data source, which takes longer than a normal incremental refresh.", "确认从头重读全部 Token 数据？这会清空当前统计并重新扫描全部已配置数据源，耗时会比普通增量刷新更长。"), isPresented: $confirmFullRebuild, titleVisibility: .visible) {
             Button(lang.select("Full rebuild", "全量重读"), role: .destructive) { Task { await store.rebuildAllData() } }
             Button(lang.select("Cancel", "取消"), role: .cancel) {}
+        }
+    }
+
+    private var autoRefreshSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(lang.select("Auto Refresh", "自动刷新")).font(.headline)
+            Toggle(lang.select("Refresh usage data automatically", "自动刷新用量数据"), isOn: $store.autoRefreshEnabled)
+            HStack(spacing: 10) {
+                Text(lang.select("Interval", "刷新间隔"))
+                Picker(lang.select("Interval", "刷新间隔"), selection: $store.autoRefreshInterval) {
+                    ForEach(RefreshInterval.allCases) { interval in
+                        Text(interval.displayName(lang)).tag(interval)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 160)
+            }
+            .disabled(!store.autoRefreshEnabled)
+            Text(lang.select("When on, TokenScope runs an incremental sync on the chosen interval. \"Real-time\" polls about once a second; if the previous refresh is still running, the next tick is skipped.", "开启后，TokenScope 会按所选间隔自动增量同步。「实时刷新」约每秒轮询一次；若上一次刷新尚未结束，则会跳过本次。"))
+                .font(.caption)
+                .foregroundStyle(Color.scopeTextMuted)
         }
     }
 

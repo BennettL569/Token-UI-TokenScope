@@ -8,8 +8,10 @@
 
 /* Begin PBXBuildFile section */
 		01226153AF76D0189670E028 /* LocalUsageAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = E929B914BBD011E50E1CB105 /* LocalUsageAdapters.swift */; };
+		02D8CB391529A8ADEC439BF5 /* ReadOnlySQLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902F0221473B6D95A807B58F /* ReadOnlySQLite.swift */; };
 		038B8CEA62A3D1F11233AC1C /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E70C6F0260C49EA0A1B272 /* Utilities.swift */; };
 		03F4EA8196CAA8713918359C /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C994866F867AFE0F979E3DD7 /* KeychainService.swift */; };
+		079F119BF4A986781470BBC8 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94CF14953188D561B711863F /* Localization.swift */; };
 		0991E9280DA8D0E233EFCF88 /* HermesSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 610BD2A2C140428836CF9432 /* HermesSQLiteUsageAdapter.swift */; };
 		0F1E0EB60A284B940DB47B3E /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E70C6F0260C49EA0A1B272 /* Utilities.swift */; };
 		0FCA2B084830342412B95682 /* TokenScopeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38896D16CEF158E3B96333DE /* TokenScopeConfiguration.swift */; };
@@ -17,6 +19,7 @@
 		15EE40E3C3A821460333E84D /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B4CCA93232D440B931F82F9 /* DashboardView.swift */; };
 		1D2EF355DBC55761127B93B1 /* TokenScopeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38896D16CEF158E3B96333DE /* TokenScopeConfiguration.swift */; };
 		25DB8B671FE5463F8589DE8C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F4368C007FFC3D2A4EB9CD33 /* WidgetKit.framework */; };
+		29C67CC20CD86CA64DB6275D /* ReadOnlySQLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 902F0221473B6D95A807B58F /* ReadOnlySQLite.swift */; };
 		2B5AD8A085C87A24AD7A01CA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 628C459FF37678D281E610AF /* Assets.xcassets */; };
 		2E676273D7215E4CB65F46F3 /* WidgetSummaryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D62BECDBAC13D691A91A343A /* WidgetSummaryStore.swift */; };
 		3939E8312591B4BA1201C2E7 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6E43475037F3140B62E284CA /* SwiftUI.framework */; };
@@ -25,11 +28,11 @@
 		3F0B365F49BFBF77DBA63C66 /* UsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735F7CC257AC335E64F5501B /* UsageStore.swift */; };
 		43C762F4BD8E990C23826CC1 /* TokenScopeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C974DA5A8316A8C7E216D23D /* TokenScopeWidget.swift */; };
 		4A6EE3A1D1264B428D179D9D /* OpenCodeSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */; };
-		D0DE00000000000000000002 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
 		52E2BE93909F36CFB637BED7 /* UsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735F7CC257AC335E64F5501B /* UsageStore.swift */; };
 		53AAC978533C5D9EB6C91F4F /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = DCDDE353B9782CAA309FBF4C /* libsqlite3.tbd */; };
 		573434521A0A885697988F00 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6A50A6A8D04FF0C84E8E31F2 /* Cocoa.framework */; };
 		585FA8997A2F88DB2F9930C9 /* TokenScopeWidgetsExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7AD9FF27FA04E8BFA8137D8A /* TokenScopeWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		603D9EAB552A8DC5BC72AB31 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94CF14953188D561B711863F /* Localization.swift */; };
 		622AA3D2285533440E4AC53C /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6A50A6A8D04FF0C84E8E31F2 /* Cocoa.framework */; };
 		6765A1408E23FFDA85FCA13E /* UsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04A79847530558FDD2AC52 /* UsageAdapter.swift */; };
 		6F9CD124430921AAB1B4EB15 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 616FF21BFC7B4BDB1641E61C /* App.swift */; };
@@ -45,24 +48,27 @@
 		97A73FDD99832D43ABF474C7 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3550BFC63A50BC312B5B8674 /* Security.framework */; };
 		9A72C476A0065A6E0B1F7B27 /* TokenScopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65479C1E6BD11291D6384466 /* TokenScopeTests.swift */; };
 		9A806CE876AA88893D48A1EB /* TokenScopeCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A694A164EA4AE650A9F485E3 /* TokenScopeCore.framework */; };
+		9C8AAECB84D34D2C3FE19C3A /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */; };
 		A18099191FB50826EEB64074 /* LocalUsageAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = E929B914BBD011E50E1CB105 /* LocalUsageAdapters.swift */; };
 		A4E6FF62F92024BEFEEACF07 /* HermesSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 610BD2A2C140428836CF9432 /* HermesSQLiteUsageAdapter.swift */; };
 		A685214CB1D8376064756A1A /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C994866F867AFE0F979E3DD7 /* KeychainService.swift */; };
 		B1DD73203D41A541BD5E378A /* PersistentUsageRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1244D8BE83989DC55FC9301D /* PersistentUsageRepository.swift */; };
 		B5AE65B932CFCFFC0282B6FC /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = EC3ABAE78A530DDB7B8B9900 /* libsqlite3.tbd */; };
 		B8884838E9047A582BE43107 /* OpenCodeSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */; };
-		D0DE00000000000000000003 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
 		BEB70790C25416580BDEFBBB /* Engines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B773EAAEE7240E9246B952 /* Engines.swift */; };
 		C3B4471C4B6AD4EFFD63FA37 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B9732FC14793F41770A905 /* Models.swift */; };
 		C5C16310EBCD19AFAD866848 /* ChartsAndBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E7D38213C7A3B8E5286654 /* ChartsAndBudget.swift */; };
 		C8EFAFFCAB520E08534B2D69 /* UsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C6153403D17CCFD0408057 /* UsageViews.swift */; };
 		C99C3EDDE734466462B50BF2 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71DD59819FA65C24B03E35D /* RootView.swift */; };
 		CD4BC7C70E0015F38F1BFE8F /* ExportSettingsWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAC7718757E8764A12E227 /* ExportSettingsWidgetViews.swift */; };
+		D0DE00000000000000000002 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
+		D0DE00000000000000000003 /* QoderSQLiteUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */; };
 		D4F45D445A83E89FDD69E314 /* TokenScopeCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A694A164EA4AE650A9F485E3 /* TokenScopeCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		DBBED15B80474E812169EDCD /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99A9AFA0F7ECE55B05E877A9 /* Theme.swift */; };
 		DD65483C746DCEA646BD024E /* ImportExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F19DA2B91CBDAA8A6E0F790 /* ImportExport.swift */; };
 		E00FE22A7B7EA8CC706EFEAA /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1448699AE41EB27FA095FBF9 /* XCTest.framework */; };
 		EA0BF631AEB83B74D4BFB64F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B9732FC14793F41770A905 /* Models.swift */; };
+		EB33E4CDCDAE1F0E63E41FCC /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,47 +122,50 @@
 
 /* Begin PBXFileReference section */
 		018F0D8A0752260C146EBC8C /* TokenScopeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TokenScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		0B4CCA93232D440B931F82F9 /* DashboardView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DashboardView.swift; path = "Sources/TokenScopeApp/Views/DashboardView.swift"; sourceTree = SOURCE_ROOT; };
-		1244D8BE83989DC55FC9301D /* PersistentUsageRepository.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistentUsageRepository.swift; path = "Sources/TokenScopeCore/Storage/PersistentUsageRepository.swift"; sourceTree = SOURCE_ROOT; };
+		0B4CCA93232D440B931F82F9 /* DashboardView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DashboardView.swift; path = Sources/TokenScopeApp/Views/DashboardView.swift; sourceTree = SOURCE_ROOT; };
+		1244D8BE83989DC55FC9301D /* PersistentUsageRepository.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistentUsageRepository.swift; path = Sources/TokenScopeCore/Storage/PersistentUsageRepository.swift; sourceTree = SOURCE_ROOT; };
 		1448699AE41EB27FA095FBF9 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = XCTest.framework; sourceTree = "<group>"; };
-		27E7D38213C7A3B8E5286654 /* ChartsAndBudget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ChartsAndBudget.swift; path = "Sources/TokenScopeApp/Views/ChartsAndBudget.swift"; sourceTree = SOURCE_ROOT; };
+		27E7D38213C7A3B8E5286654 /* ChartsAndBudget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ChartsAndBudget.swift; path = Sources/TokenScopeApp/Views/ChartsAndBudget.swift; sourceTree = SOURCE_ROOT; };
 		2D016A3DB767C22E5236BCF8 /* TokenScopeWidgets.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; name = TokenScopeWidgets.entitlements; path = Config/TokenScopeWidgets.entitlements; sourceTree = "<group>"; };
 		3550BFC63A50BC312B5B8674 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Security.framework; sourceTree = "<group>"; };
-		38896D16CEF158E3B96333DE /* TokenScopeConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TokenScopeConfiguration.swift; path = "Sources/TokenScopeCore/Services/TokenScopeConfiguration.swift"; sourceTree = SOURCE_ROOT; };
-		59B773EAAEE7240E9246B952 /* Engines.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Engines.swift; path = "Sources/TokenScopeCore/Services/Engines.swift"; sourceTree = SOURCE_ROOT; };
-		5F19DA2B91CBDAA8A6E0F790 /* ImportExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ImportExport.swift; path = "Sources/TokenScopeCore/Services/ImportExport.swift"; sourceTree = SOURCE_ROOT; };
-		610BD2A2C140428836CF9432 /* HermesSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HermesSQLiteUsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/HermesSQLiteUsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
-		616FF21BFC7B4BDB1641E61C /* App.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = App.swift; path = "Sources/TokenScopeApp/App.swift"; sourceTree = SOURCE_ROOT; };
-		628C459FF37678D281E610AF /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = SOURCE_ROOT; };
-		64C6153403D17CCFD0408057 /* UsageViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageViews.swift; path = "Sources/TokenScopeApp/Views/UsageViews.swift"; sourceTree = SOURCE_ROOT; };
-		65479C1E6BD11291D6384466 /* TokenScopeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TokenScopeTests.swift; path = "Tests/TokenScopeTests/TokenScopeTests.swift"; sourceTree = SOURCE_ROOT; };
+		38896D16CEF158E3B96333DE /* TokenScopeConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TokenScopeConfiguration.swift; path = Sources/TokenScopeCore/Services/TokenScopeConfiguration.swift; sourceTree = SOURCE_ROOT; };
+		3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UpdateService.swift; path = Sources/TokenScopeCore/Services/UpdateService.swift; sourceTree = SOURCE_ROOT; };
+		59B773EAAEE7240E9246B952 /* Engines.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Engines.swift; path = Sources/TokenScopeCore/Services/Engines.swift; sourceTree = SOURCE_ROOT; };
+		5F19DA2B91CBDAA8A6E0F790 /* ImportExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ImportExport.swift; path = Sources/TokenScopeCore/Services/ImportExport.swift; sourceTree = SOURCE_ROOT; };
+		610BD2A2C140428836CF9432 /* HermesSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HermesSQLiteUsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/HermesSQLiteUsageAdapter.swift; sourceTree = SOURCE_ROOT; };
+		616FF21BFC7B4BDB1641E61C /* App.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = App.swift; path = Sources/TokenScopeApp/App.swift; sourceTree = SOURCE_ROOT; };
+		628C459FF37678D281E610AF /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		64C6153403D17CCFD0408057 /* UsageViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageViews.swift; path = Sources/TokenScopeApp/Views/UsageViews.swift; sourceTree = SOURCE_ROOT; };
+		65479C1E6BD11291D6384466 /* TokenScopeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TokenScopeTests.swift; path = Tests/TokenScopeTests/TokenScopeTests.swift; sourceTree = SOURCE_ROOT; };
 		65C29B407A4B2CFEF25BC231 /* TokenScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TokenScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		65EAC7718757E8764A12E227 /* ExportSettingsWidgetViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExportSettingsWidgetViews.swift; path = "Sources/TokenScopeApp/Views/ExportSettingsWidgetViews.swift"; sourceTree = SOURCE_ROOT; };
+		65EAC7718757E8764A12E227 /* ExportSettingsWidgetViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExportSettingsWidgetViews.swift; path = Sources/TokenScopeApp/Views/ExportSettingsWidgetViews.swift; sourceTree = SOURCE_ROOT; };
 		67156DFCBE8DBFC95E31DE0C /* TokenScope.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; name = TokenScope.entitlements; path = Config/TokenScope.entitlements; sourceTree = "<group>"; };
 		6A50A6A8D04FF0C84E8E31F2 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		6E43475037F3140B62E284CA /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SwiftUI.framework; sourceTree = "<group>"; };
-		735F7CC257AC335E64F5501B /* UsageStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageStore.swift; path = "Sources/TokenScopeCore/Storage/UsageStore.swift"; sourceTree = SOURCE_ROOT; };
+		735F7CC257AC335E64F5501B /* UsageStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageStore.swift; path = Sources/TokenScopeCore/Storage/UsageStore.swift; sourceTree = SOURCE_ROOT; };
 		7AD9FF27FA04E8BFA8137D8A /* TokenScopeWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TokenScopeWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E643F92FDAC52D4F3F447EB /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = SwiftUI.framework; sourceTree = "<group>"; };
 		8076B8FD8007D409B4B0D8AC /* TokenScopeWidgets-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = "TokenScopeWidgets-Info.plist"; path = "Config/TokenScopeWidgets-Info.plist"; sourceTree = "<group>"; };
 		89B01FDCBB5F10BD3248598E /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = WidgetKit.framework; sourceTree = "<group>"; };
-		8DEA93A9720861CD08C87428 /* SettingsViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsViews.swift; path = "Sources/TokenScopeApp/Views/SettingsViews.swift"; sourceTree = SOURCE_ROOT; };
-		99A9AFA0F7ECE55B05E877A9 /* Theme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Theme.swift; path = "Sources/TokenScopeApp/Theme/Theme.swift"; sourceTree = SOURCE_ROOT; };
+		8DEA93A9720861CD08C87428 /* SettingsViews.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsViews.swift; path = Sources/TokenScopeApp/Views/SettingsViews.swift; sourceTree = SOURCE_ROOT; };
+		902F0221473B6D95A807B58F /* ReadOnlySQLite.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ReadOnlySQLite.swift; path = Sources/TokenScopeCore/Adapters/ReadOnlySQLite.swift; sourceTree = SOURCE_ROOT; };
+		94CF14953188D561B711863F /* Localization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Localization.swift; path = Sources/TokenScopeCore/Services/Localization.swift; sourceTree = SOURCE_ROOT; };
+		99A9AFA0F7ECE55B05E877A9 /* Theme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Theme.swift; path = Sources/TokenScopeApp/Theme/Theme.swift; sourceTree = SOURCE_ROOT; };
 		A694A164EA4AE650A9F485E3 /* TokenScopeCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TokenScopeCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		A71DD59819FA65C24B03E35D /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = "Sources/TokenScopeApp/Views/RootView.swift"; sourceTree = SOURCE_ROOT; };
-		C5E70C6F0260C49EA0A1B272 /* Utilities.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Utilities.swift; path = "Sources/TokenScopeCore/Services/Utilities.swift"; sourceTree = SOURCE_ROOT; };
-		C974DA5A8316A8C7E216D23D /* TokenScopeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "TokenScopeWidgets/TokenScopeWidget.swift"; sourceTree = SOURCE_ROOT; };
-		C994866F867AFE0F979E3DD7 /* KeychainService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeychainService.swift; path = "Sources/TokenScopeCore/Services/KeychainService.swift"; sourceTree = SOURCE_ROOT; };
-		D62BECDBAC13D691A91A343A /* WidgetSummaryStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetSummaryStore.swift; path = "Sources/TokenScopeCore/Services/WidgetSummaryStore.swift"; sourceTree = SOURCE_ROOT; };
-		D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = OpenCodeSQLiteUsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/OpenCodeSQLiteUsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
-		D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = QoderSQLiteUsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/QoderSQLiteUsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
+		A71DD59819FA65C24B03E35D /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = Sources/TokenScopeApp/Views/RootView.swift; sourceTree = SOURCE_ROOT; };
+		C5E70C6F0260C49EA0A1B272 /* Utilities.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Utilities.swift; path = Sources/TokenScopeCore/Services/Utilities.swift; sourceTree = SOURCE_ROOT; };
+		C974DA5A8316A8C7E216D23D /* TokenScopeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TokenScopeWidgets/TokenScopeWidget.swift; sourceTree = SOURCE_ROOT; };
+		C994866F867AFE0F979E3DD7 /* KeychainService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = KeychainService.swift; path = Sources/TokenScopeCore/Services/KeychainService.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000001 /* QoderSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = QoderSQLiteUsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/QoderSQLiteUsageAdapter.swift; sourceTree = SOURCE_ROOT; };
+		D62BECDBAC13D691A91A343A /* WidgetSummaryStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WidgetSummaryStore.swift; path = Sources/TokenScopeCore/Services/WidgetSummaryStore.swift; sourceTree = SOURCE_ROOT; };
+		D789E2272EF2CE867D3C284D /* OpenCodeSQLiteUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = OpenCodeSQLiteUsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/OpenCodeSQLiteUsageAdapter.swift; sourceTree = SOURCE_ROOT; };
 		DCDDE353B9782CAA309FBF4C /* libsqlite3.tbd */ = {isa = PBXFileReference; includeInIndex = 1; path = libsqlite3.tbd; sourceTree = "<group>"; };
 		E583DF1A112511E872E7FDC6 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Security.framework; sourceTree = "<group>"; };
-		E929B914BBD011E50E1CB105 /* LocalUsageAdapters.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LocalUsageAdapters.swift; path = "Sources/TokenScopeCore/Adapters/LocalUsageAdapters.swift"; sourceTree = SOURCE_ROOT; };
+		E929B914BBD011E50E1CB105 /* LocalUsageAdapters.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LocalUsageAdapters.swift; path = Sources/TokenScopeCore/Adapters/LocalUsageAdapters.swift; sourceTree = SOURCE_ROOT; };
 		EC3ABAE78A530DDB7B8B9900 /* libsqlite3.tbd */ = {isa = PBXFileReference; includeInIndex = 1; path = libsqlite3.tbd; sourceTree = "<group>"; };
-		F1B9732FC14793F41770A905 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Models.swift; path = "Sources/TokenScopeCore/Models/Models.swift"; sourceTree = SOURCE_ROOT; };
+		F1B9732FC14793F41770A905 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Models.swift; path = Sources/TokenScopeCore/Models/Models.swift; sourceTree = SOURCE_ROOT; };
 		F4368C007FFC3D2A4EB9CD33 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = WidgetKit.framework; sourceTree = "<group>"; };
-		FA04A79847530558FDD2AC52 /* UsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageAdapter.swift; path = "Sources/TokenScopeCore/Adapters/UsageAdapter.swift"; sourceTree = SOURCE_ROOT; };
+		FA04A79847530558FDD2AC52 /* UsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/UsageAdapter.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -311,6 +320,9 @@
 				D62BECDBAC13D691A91A343A /* WidgetSummaryStore.swift */,
 				1244D8BE83989DC55FC9301D /* PersistentUsageRepository.swift */,
 				735F7CC257AC335E64F5501B /* UsageStore.swift */,
+				94CF14953188D561B711863F /* Localization.swift */,
+				3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */,
+				902F0221473B6D95A807B58F /* ReadOnlySQLite.swift */,
 			);
 			name = TokenScopeCore;
 			sourceTree = "<group>";
@@ -525,6 +537,9 @@
 				3F0B365F49BFBF77DBA63C66 /* UsageStore.swift in Sources */,
 				4A6EE3A1D1264B428D179D9D /* OpenCodeSQLiteUsageAdapter.swift in Sources */,
 				D0DE00000000000000000002 /* QoderSQLiteUsageAdapter.swift in Sources */,
+				079F119BF4A986781470BBC8 /* Localization.swift in Sources */,
+				9C8AAECB84D34D2C3FE19C3A /* UpdateService.swift in Sources */,
+				02D8CB391529A8ADEC439BF5 /* ReadOnlySQLite.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -561,6 +576,9 @@
 				52E2BE93909F36CFB637BED7 /* UsageStore.swift in Sources */,
 				B8884838E9047A582BE43107 /* OpenCodeSQLiteUsageAdapter.swift in Sources */,
 				D0DE00000000000000000003 /* QoderSQLiteUsageAdapter.swift in Sources */,
+				603D9EAB552A8DC5BC72AB31 /* Localization.swift in Sources */,
+				EB33E4CDCDAE1F0E63E41FCC /* UpdateService.swift in Sources */,
+				29C67CC20CD86CA64DB6275D /* ReadOnlySQLite.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -659,7 +677,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -684,7 +702,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -713,7 +731,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;
@@ -736,7 +754,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -766,7 +784,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -791,7 +809,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -875,7 +893,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -907,7 +925,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.7;
+				MARKETING_VERSION = 1.1.16;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;

@@ -65,11 +65,36 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     @Published public var budgetProgressMode: BudgetProgressMode = .tokens {
         didSet { scheduleDashboardRebuild() }
     }
+    /// Whether the app refreshes usage data on a timer. Off by default. Persisted to `UserDefaults`;
+    /// toggling it starts or stops the auto-refresh loop.
+    @Published public var autoRefreshEnabled: Bool {
+        didSet {
+            guard oldValue != autoRefreshEnabled else { return }
+            UserDefaults.standard.set(autoRefreshEnabled, forKey: Self.autoRefreshEnabledDefaultsKey)
+            restartAutoRefreshTimer()
+        }
+    }
+    /// How often auto-refresh runs (when enabled). Persisted to `UserDefaults`; changing it restarts
+    /// the loop with the new cadence.
+    @Published public var autoRefreshInterval: RefreshInterval {
+        didSet {
+            guard oldValue != autoRefreshInterval else { return }
+            UserDefaults.standard.set(autoRefreshInterval.rawValue, forKey: Self.autoRefreshIntervalDefaultsKey)
+            if autoRefreshEnabled { restartAutoRefreshTimer() }
+        }
+    }
 
     private let repository: PersistentUsageRepository
     private let registry: AdapterRegistry
 
+    /// The running auto-refresh loop, if any. A single repeating `Task` that sleeps for the chosen
+    /// interval then runs an incremental `refreshAll()`. Restarting cancels the old one first, so
+    /// there is never more than one in flight.
+    private var autoRefreshTask: Task<Void, Never>?
+
     static let languageDefaultsKey = "TokenScopeLanguage"
+    static let autoRefreshEnabledDefaultsKey = "TokenScopeAutoRefreshEnabled"
+    static let autoRefreshIntervalDefaultsKey = "TokenScopeAutoRefreshInterval"
     /// Bumped whenever token parsing changes in a way that makes previously-imported records
     /// wrong. On launch, a stored value behind this triggers a one-time full reparse so the fix
     /// reaches historical data (incremental sync alone only re-reads newly appended log bytes).
@@ -111,6 +136,8 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         self.repository = repository
         self.registry = registry
         self.language = UserDefaults.standard.string(forKey: Self.languageDefaultsKey).flatMap(AppLanguage.init(rawValue:)) ?? .english
+        self.autoRefreshEnabled = UserDefaults.standard.bool(forKey: Self.autoRefreshEnabledDefaultsKey)
+        self.autoRefreshInterval = UserDefaults.standard.string(forKey: Self.autoRefreshIntervalDefaultsKey).flatMap(RefreshInterval.init(rawValue:)) ?? .oneMinute
         self.sources = Self.defaultSources()
         let calendar = Calendar.current
         let now = Date()
@@ -134,11 +161,53 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         }
         self.records = repository.all()
         rebuildDashboardSnapshot()
+        restartAutoRefreshTimer()
     }
 
+    deinit {
+        autoRefreshTask?.cancel()
+    }
+
+    /// (Re)starts the auto-refresh loop to match the current `autoRefreshEnabled` / `autoRefreshInterval`,
+    /// or stops it when disabled. The loop sleeps for the interval and then runs an incremental
+    /// `refreshAll()`; a tick is skipped while a refresh (manual or a slow previous tick) is still
+    /// running, so refreshes never overlap. Safe to call from `init`, `didSet`, or the UI — it only
+    /// cancels/replaces the stored task and schedules a `@MainActor` loop.
+    public func restartAutoRefreshTimer() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+        guard autoRefreshEnabled else { return }
+        let seconds = autoRefreshInterval.seconds
+        autoRefreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                if !self.isRefreshing {
+                    await self.refreshAll()
+                }
+            }
+        }
+    }
+
+    /// Public refresh entry point used by the launch sequence, the UI refresh buttons, and the
+    /// auto-refresh timer. A reentrancy guard makes concurrent triggers safe: if a refresh — or a
+    /// clear / full rebuild, which raise the same `isRefreshing` gate — is already running, the call
+    /// is a no-op instead of a second pass that would interleave on the main actor and race on
+    /// `sources` / `records`. This matters now that the auto-refresh timer fires `refreshAll()`
+    /// periodically alongside the always-available manual triggers.
     @MainActor
     public func refreshAll(fullScan: Bool = false) async {
+        guard !isRefreshing else { return }
         isRefreshing = true
+        defer { isRefreshing = false }
+        await performRefresh(fullScan: fullScan)
+    }
+
+    /// The actual refresh work. Assumes the caller (`refreshAll` or `rebuildAllData`) already holds
+    /// the `isRefreshing` gate across the whole operation, so it never toggles the flag itself.
+    @MainActor
+    private func performRefresh(fullScan: Bool = false) async {
         refreshProgress = fullScan ? L("Preparing full rescan", "准备全量重读") : L("Preparing incremental sync", "准备增量同步")
         errorMessage = nil
         // The repository is thread-safe (NSLock) and Sendable, so its heavy synchronous
@@ -175,7 +244,6 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         try? WidgetSummaryStore.save(summary)
         errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
         refreshProgress = errors.isEmpty ? L("Sync complete: \(records.count) records", "同步完成：\(records.count) 条") : L("Sync finished with \(errors.count) error(s)", "同步完成，有 \(errors.count) 个错误")
-        isRefreshing = false
     }
 
     /// Entry point for the app's launch refresh. If the parser was corrected since the data was
@@ -240,15 +308,25 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
 
     @MainActor
     public func rebuildAllData() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         let repo = repository
         await Task.detached { repo.clear() }.value
         records = []
         rebuildDashboardSnapshot()
-        await refreshAll(fullScan: true)
+        // Call performRefresh, not refreshAll: the gate is already held here, and refreshAll's
+        // reentrancy guard would otherwise turn this nested refresh into a no-op.
+        await performRefresh(fullScan: true)
     }
 
     @MainActor
     public func clearLocalData() async {
+        // Hold the busy gate across the whole clear so an auto-refresh tick can't slip in between
+        // the detached clear and the `records = []` reset and re-upsert rows into the cleared DB.
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         let repo = repository
         await Task.detached { repo.clear() }.value
         records = []

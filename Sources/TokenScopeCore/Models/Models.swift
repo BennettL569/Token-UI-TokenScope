@@ -45,6 +45,46 @@ public enum TimeRange: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// How often the app automatically refreshes usage data when auto-refresh is enabled.
+///
+/// The `rawValue`s are stable preference keys persisted to `UserDefaults` (NOT display strings —
+/// unlike the Chinese-keyed enums elsewhere), so they must not change once shipped; the localized
+/// label comes from `displayName(_:)`. Cases are declared longest-interval first so the settings
+/// picker lists them 1h → … → real-time in that order.
+///
+/// `.realtime` is just the most frequent option — a one-second poll. Because every refresh is
+/// incremental (each adapter resumes from a byte-offset / timestamp cursor and reads only newly
+/// appended log data), polling once a second is cheap, and overlapping ticks are skipped while a
+/// refresh is still in flight.
+public enum RefreshInterval: String, Codable, CaseIterable, Identifiable, Sendable {
+    case oneHour = "1h"
+    case thirtyMinutes = "30m"
+    case tenMinutes = "10m"
+    case fiveMinutes = "5m"
+    case oneMinute = "1m"
+    case thirtySeconds = "30s"
+    case tenSeconds = "10s"
+    case fiveSeconds = "5s"
+    case realtime = "realtime"
+
+    public var id: String { rawValue }
+
+    /// Seconds to wait between automatic refreshes.
+    public var seconds: TimeInterval {
+        switch self {
+        case .oneHour: return 3600
+        case .thirtyMinutes: return 1800
+        case .tenMinutes: return 600
+        case .fiveMinutes: return 300
+        case .oneMinute: return 60
+        case .thirtySeconds: return 30
+        case .tenSeconds: return 10
+        case .fiveSeconds: return 5
+        case .realtime: return 1
+        }
+    }
+}
+
 public struct CustomDateRange: Codable, Equatable, Hashable, Sendable {
     public var start: Date
     public var end: Date

@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.7-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.16-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -154,7 +154,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 35 checks passed (count is derived, so it stays in sync)
+#    expected: TokenScopeCoreTestsRunner: 48 checks passed (count is derived, so it stays in sync)
 
 # 2) Swift Testing suite
 swift test
@@ -352,6 +352,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.16** | **Auto-refresh:** a Settings toggle plus an interval picker (1h / 30m / 10m / 5m / 1m / 30s / 10s / 5s / real-time) runs an incremental sync on a timer, skipping a tick while one is still in flight. **Tool colors:** every tool now has its own color in the tool distribution (was only Claude Code / Codex / Hermes; the rest were white), with a color swatch per row. **Clearer empty state:** when a search / tool filter matches nothing, the tool distribution says so and offers a one-click **Clear filter** instead of the misleading "no data" message. **Hardening:** all refresh triggers (timer, manual buttons, clear, full rebuild) share one reentrancy gate so they can't interleave on the main actor. Also adds the remaining Core sources to the Xcode targets so the Xcode build path matches SwiftPM. |
 | **v1.1.7** | Correctness, privacy & trust pass. **Privacy:** a redacted export no longer leaks the local file path / username (`rawSource` is gated behind the identifiers toggle). **Codex accuracy:** usage is taken only from each event's per-turn delta, never the session-cumulative total (prevents large over-counts), and file discovery keeps the **newest** sessions when a directory exceeds the cap (was non-deterministic). **Updater trust:** the downloaded build is verified (version match + valid code signature) before the in-place swap; Settings now shows release notes, last-checked time and an opt-in "check on launch". **Visibility:** sync failures now show a dashboard banner instead of silently lowering totals. Plus a single `VERSION` source of truth and a self-counting test runner. |
 | **v1.1.6** | Add an **in-app updater** in Settings. **Check for Updates** queries GitHub Releases; **Update Now** downloads the new build and replaces the app in place (backup-and-rollback swap, so a failed swap never destroys the install) then relaunches. Update Now stays disabled until a check finds a newer release that can be installed in place — if the app is running from a read-only or Gatekeeper-translocated location it routes you to the releases page instead. Checks run only on click (no automatic/background network calls). |
 | **v1.1.5** | Clarify the dashboard **Cache Creation** metric for tools that don't report cache-write tokens: when filtered to Codex (OpenAI accounting reports cache *reads* only, no cache writes), the card shows an info-icon hint explaining the structural 0 instead of it looking like a bug. UI only — no data, parser or pricing changes. |

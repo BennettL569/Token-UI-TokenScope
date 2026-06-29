@@ -582,4 +582,44 @@ struct TokenScopeTests {
         #expect(all.count == 1)
         #expect(all[0].totalTokens == 4)
     }
+
+    @Test func refreshIntervalProvidesOrderedCadences() {
+        // Nine auto-refresh cadences, declared 1h → real-time so the settings picker lists them in
+        // that order. rawValues are stable preference keys (persisted to UserDefaults) and must
+        // round-trip; real-time is the smallest (most frequent) positive cadence.
+        #expect(RefreshInterval.allCases.count == 9)
+        #expect(RefreshInterval.allCases.first == .oneHour)
+        #expect(RefreshInterval.allCases.last == .realtime)
+        #expect(RefreshInterval.oneHour.seconds == 3600)
+        #expect(RefreshInterval.oneMinute.seconds == 60)
+        #expect(RefreshInterval.fiveSeconds.seconds == 5)
+        #expect(RefreshInterval.realtime.seconds > 0)
+        #expect(RefreshInterval.allCases.map(\.seconds).min() == RefreshInterval.realtime.seconds)
+        #expect(RefreshInterval(rawValue: "30m") == .thirtyMinutes)
+        #expect(RefreshInterval.realtime.displayName(.english) == "Real-time")
+        #expect(RefreshInterval.realtime.displayName(.chinese) == "实时刷新")
+    }
+
+    @Test func clearLocalDataNoOpsWhileRefreshing() async throws {
+        // The reentrancy gate (added when auto-refresh started calling refreshAll on a timer) must
+        // stop clearLocalData from running while a refresh is in flight — otherwise a concurrent
+        // refresh could re-upsert rows into the just-cleared store. With the gate held it is a
+        // no-op; once released it clears.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-clearguard-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+        }
+        let repo = PersistentUsageRepository(dbURL: url)
+        repo.upsert([UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: "guard-1", rawSource: "r")])
+        let store = UsageStore(repository: repo)
+        #expect(store.records.count == 1)
+        store.isRefreshing = true
+        await store.clearLocalData()
+        #expect(store.records.count == 1)
+        store.isRefreshing = false
+        await store.clearLocalData()
+        #expect(store.records.isEmpty)
+    }
 }

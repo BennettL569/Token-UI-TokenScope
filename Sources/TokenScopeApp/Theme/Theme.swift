@@ -1,4 +1,5 @@
 import SwiftUI
+import TokenScopeCore
 
 extension Color {
     static let scopeBackgroundLight = Color(red: 0.94, green: 0.975, blue: 1.0)
@@ -9,6 +10,32 @@ extension Color {
     static let neonBlue = Color(red: 0.13, green: 0.34, blue: 0.95)
     static let neonPurple = Color(red: 0.56, green: 0.20, blue: 0.88)
     static let scopeTextMuted = Color(red: 0.25, green: 0.32, blue: 0.43).opacity(0.82)
+
+    // Per-tool accent colors used by the tool-distribution chart. The three originals
+    // (cyan / blue / purple) are reused; the rest fill out the hue wheel so all eight tools
+    // are visually distinct on both the light and dark themes.
+    static let toolOrange = Color(red: 0.96, green: 0.49, blue: 0.12)
+    static let toolGreen = Color(red: 0.16, green: 0.69, blue: 0.40)
+    static let toolMagenta = Color(red: 0.85, green: 0.18, blue: 0.66)
+    static let toolRed = Color(red: 0.89, green: 0.22, blue: 0.24)
+    static let toolGold = Color(red: 0.72, green: 0.54, blue: 0.04)
+}
+
+extension ToolKind {
+    /// A distinct accent color per tool, so each is easy to tell apart in the tool-distribution
+    /// chart (previously only Claude Code / CodeX / Hermes were colored and the rest were white).
+    var displayColor: Color {
+        switch self {
+        case .claudeCode: return .neonCyan
+        case .codeX: return .neonBlue
+        case .hermes: return .neonPurple
+        case .openClaw: return .toolOrange
+        case .openCode: return .toolGreen
+        case .qoder: return .toolMagenta
+        case .qoderCN: return .toolRed
+        case .zCode: return .toolGold
+        }
+    }
 }
 
 struct ScopeTheme {

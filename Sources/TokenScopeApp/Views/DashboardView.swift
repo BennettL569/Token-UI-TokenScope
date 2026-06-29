@@ -57,7 +57,11 @@ struct DashboardView: View {
                         .frame(width: 310)
                 }
                 HStack(alignment: .top, spacing: 16) {
-                    ToolDistributionView(groups: store.dashboardSnapshot.toolGroups)
+                    ToolDistributionView(
+                        groups: store.dashboardSnapshot.toolGroups,
+                        activeFilterSummary: activeFilterSummary,
+                        onClearFilter: activeFilterSummary == nil ? nil : { store.searchText = ""; store.selectedTool = nil }
+                    )
                     RecentUsageView(records: store.dashboardSnapshot.recentRecords)
                 }
             }
@@ -69,6 +73,22 @@ struct DashboardView: View {
         .contentMargins(.trailing, 14, for: .scrollContent)
         .contentMargins(.leading, 2, for: .scrollContent)
         .scrollIndicators(.automatic)
+    }
+
+    /// Describes the active search / tool filter (the dimensions that filter the tool distribution,
+    /// `selected`-range and request cards), or `nil` when neither is set. Used to explain an empty
+    /// tool distribution as "filtered out" rather than "no data", and to offer a one-click clear.
+    private var activeFilterSummary: String? {
+        var parts: [String] = []
+        if !store.searchText.isEmpty {
+            parts.append(lang.select("search “\(store.searchText)”", "搜索 “\(store.searchText)”"))
+        }
+        if let tool = store.selectedTool {
+            parts.append(lang.select("tool \(tool.rawValue)", "工具 \(tool.rawValue)"))
+        }
+        guard !parts.isEmpty else { return nil }
+        let joined = parts.joined(separator: lang.select(", ", "，"))
+        return lang.select("Current filter: \(joined)", "当前筛选：\(joined)")
     }
 
     private var metrics: some View {
@@ -226,6 +246,11 @@ struct RangeFilterBar: View {
                         try? await Task.sleep(nanoseconds: 250_000_000)
                         guard !Task.isCancelled, store.searchText != searchDraft else { return }
                         store.searchText = searchDraft
+                    }
+                    // Reflect external clears (e.g. the tool-distribution "Clear filter" button) back
+                    // into the field; otherwise the draft would re-push the stale term after debounce.
+                    .onChange(of: store.searchText) { _, newValue in
+                        if newValue != searchDraft { searchDraft = newValue }
                     }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

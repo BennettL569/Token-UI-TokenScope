@@ -69,6 +69,14 @@
 		E00FE22A7B7EA8CC706EFEAA /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1448699AE41EB27FA095FBF9 /* XCTest.framework */; };
 		EA0BF631AEB83B74D4BFB64F /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B9732FC14793F41770A905 /* Models.swift */; };
 		EB33E4CDCDAE1F0E63E41FCC /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */; };
+		D0DE00000000000000000020 /* SafetyBackups.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000010 /* SafetyBackups.swift */; };
+		D0DE00000000000000000021 /* RebuildPruning.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000011 /* RebuildPruning.swift */; };
+		D0DE00000000000000000022 /* Backup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000012 /* Backup.swift */; };
+		D0DE00000000000000000023 /* CodexDedupeKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000013 /* CodexDedupeKey.swift */; };
+		D0DE00000000000000000030 /* SafetyBackups.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000010 /* SafetyBackups.swift */; };
+		D0DE00000000000000000031 /* RebuildPruning.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000011 /* RebuildPruning.swift */; };
+		D0DE00000000000000000032 /* Backup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000012 /* Backup.swift */; };
+		D0DE00000000000000000033 /* CodexDedupeKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000013 /* CodexDedupeKey.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -166,6 +174,10 @@
 		F1B9732FC14793F41770A905 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Models.swift; path = Sources/TokenScopeCore/Models/Models.swift; sourceTree = SOURCE_ROOT; };
 		F4368C007FFC3D2A4EB9CD33 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = WidgetKit.framework; sourceTree = "<group>"; };
 		FA04A79847530558FDD2AC52 /* UsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/UsageAdapter.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000010 /* SafetyBackups.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SafetyBackups.swift; path = Sources/TokenScopeCore/Storage/SafetyBackups.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000011 /* RebuildPruning.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RebuildPruning.swift; path = Sources/TokenScopeCore/Storage/RebuildPruning.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000012 /* Backup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Backup.swift; path = Sources/TokenScopeCore/Services/Backup.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000013 /* CodexDedupeKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CodexDedupeKey.swift; path = Sources/TokenScopeCore/Services/CodexDedupeKey.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -323,6 +335,10 @@
 				94CF14953188D561B711863F /* Localization.swift */,
 				3AB1D2FD2BD46326125E0F01 /* UpdateService.swift */,
 				902F0221473B6D95A807B58F /* ReadOnlySQLite.swift */,
+				D0DE00000000000000000010 /* SafetyBackups.swift */,
+				D0DE00000000000000000011 /* RebuildPruning.swift */,
+				D0DE00000000000000000012 /* Backup.swift */,
+				D0DE00000000000000000013 /* CodexDedupeKey.swift */,
 			);
 			name = TokenScopeCore;
 			sourceTree = "<group>";
@@ -540,6 +556,10 @@
 				079F119BF4A986781470BBC8 /* Localization.swift in Sources */,
 				9C8AAECB84D34D2C3FE19C3A /* UpdateService.swift in Sources */,
 				02D8CB391529A8ADEC439BF5 /* ReadOnlySQLite.swift in Sources */,
+				D0DE00000000000000000020 /* SafetyBackups.swift in Sources */,
+				D0DE00000000000000000021 /* RebuildPruning.swift in Sources */,
+				D0DE00000000000000000022 /* Backup.swift in Sources */,
+				D0DE00000000000000000023 /* CodexDedupeKey.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -579,6 +599,10 @@
 				603D9EAB552A8DC5BC72AB31 /* Localization.swift in Sources */,
 				EB33E4CDCDAE1F0E63E41FCC /* UpdateService.swift in Sources */,
 				29C67CC20CD86CA64DB6275D /* ReadOnlySQLite.swift in Sources */,
+				D0DE00000000000000000030 /* SafetyBackups.swift in Sources */,
+				D0DE00000000000000000031 /* RebuildPruning.swift in Sources */,
+				D0DE00000000000000000032 /* Backup.swift in Sources */,
+				D0DE00000000000000000033 /* CodexDedupeKey.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -677,7 +701,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -702,7 +726,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -731,7 +755,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;
@@ -754,7 +778,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -784,7 +808,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -809,7 +833,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -893,7 +917,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -925,7 +949,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.16;
+				MARKETING_VERSION = 1.1.17;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;

@@ -540,15 +540,20 @@ struct TokenScopeTests {
             try? FileManager.default.removeItem(atPath: url.path + "-wal")
             try? FileManager.default.removeItem(atPath: url.path + "-shm")
         }
-        // Create a WAL-mode database, write rows, then close it (a clean close removes the
-        // -wal/-shm sidecars). A plain SQLITE_OPEN_READONLY open of what remains can fail with
-        // SQLITE_CANTOPEN; the robust helper must still return a usable handle.
+        // Create a WAL-mode database, write rows, then close it. A plain SQLITE_OPEN_READONLY open
+        // of a WAL database without its -wal/-shm sidecars fails with SQLITE_CANTOPEN; the robust
+        // helper must still return a usable handle.
         var writer: OpaquePointer?
         #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
         sqlite3_exec(writer, "PRAGMA journal_mode=WAL", nil, nil, nil)
         sqlite3_exec(writer, "CREATE TABLE t (id INTEGER)", nil, nil, nil)
         sqlite3_exec(writer, "INSERT INTO t (id) VALUES (1),(2),(3)", nil, nil, nil)
         sqlite3_close(writer)
+        // macOS's SQLite keeps the sidecars after a clean close, but the tools that write these
+        // databases (Qoder, OpenCode) ship their own SQLite, which removes them. Remove them so
+        // the read really meets a WAL database without sidecars.
+        try? FileManager.default.removeItem(atPath: url.path + "-wal")
+        try? FileManager.default.removeItem(atPath: url.path + "-shm")
 
         let db = ReadOnlySQLite.open(url.path)
         #expect(db != nil)
@@ -605,15 +610,11 @@ struct TokenScopeTests {
         // stop clearLocalData from running while a refresh is in flight — otherwise a concurrent
         // refresh could re-upsert rows into the just-cleared store. With the gate held it is a
         // no-op; once released it clears.
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-clearguard-\(UUID().uuidString).sqlite")
-        defer {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(atPath: url.path + "-wal")
-            try? FileManager.default.removeItem(atPath: url.path + "-shm")
-        }
-        let repo = PersistentUsageRepository(dbURL: url)
+        let dir = try makeTempDirectory("clearguard")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
         repo.upsert([UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: "guard-1", rawSource: "r")])
-        let store = UsageStore(repository: repo)
+        let store = UsageStore(repository: repo, widgetSummaryURL: nil)
         #expect(store.records.count == 1)
         store.isRefreshing = true
         await store.clearLocalData()
@@ -621,5 +622,373 @@ struct TokenScopeTests {
         store.isRefreshing = false
         await store.clearLocalData()
         #expect(store.records.isEmpty)
+    }
+
+    // MARK: - Rebuild keeps history; safety snapshots
+
+    /// A fresh directory for one test; the test removes it.
+    private func makeTempDirectory(_ label: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tokenscope-\(label)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func claudeUsageLine(messageId: String, input: Int) -> String {
+        #"{"type":"assistant","uuid":"u-\#(messageId)","timestamp":"2026-05-11T19:59:41.206Z","message":{"id":"\#(messageId)","model":"claude-sonnet-4.5","usage":{"input_tokens":\#(input),"output_tokens":20}}}"#
+    }
+
+    /// A store that reads Claude logs from `<directory>/logs/*.jsonl`, with its database in `directory`.
+    private func makeClaudeStore(in directory: URL) throws -> (store: UsageStore, repo: PersistentUsageRepository, logs: URL) {
+        let logs = directory.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let repo = PersistentUsageRepository(dbURL: directory.appendingPathComponent("usage.sqlite"))
+        let adapter = LocalJSONLUsageAdapter(tool: .claudeCode, displayName: "Claude Test", defaultGlobPatterns: [logs.path + "/*.jsonl"], parser: LocalUsageParser.parseClaudeLine)
+        let store = UsageStore(repository: repo, registry: AdapterRegistry(adapters: [.claudeCode: adapter]), widgetSummaryURL: nil)
+        return (store, repo, logs)
+    }
+
+    private func staleClaudeRecord(requestId: String, rawSource: String) -> UsageRecord {
+        UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(timeIntervalSince1970: 1_780_000_000), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: requestId, rawSource: rawSource)
+    }
+
+    @Test func rebuildKeepsRecordsWhoseLogsAreGone() async throws {
+        // Claude Code deletes transcripts after 30 days, so for older usage the database is the
+        // only copy. A full rebuild must re-read what still exists without dropping the rest, and
+        // must snapshot the database before it starts.
+        let dir = try makeTempDirectory("rebuild-keep")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (store, repo, logs) = try makeClaudeStore(in: dir)
+        let gone = logs.appendingPathComponent("gone.jsonl")
+        try (claudeUsageLine(messageId: "msg-gone", input: 10) + "\n").write(to: gone, atomically: true, encoding: .utf8)
+        try (claudeUsageLine(messageId: "msg-kept", input: 20) + "\n").write(to: logs.appendingPathComponent("kept.jsonl"), atomically: true, encoding: .utf8)
+        await store.refreshAll()
+        #expect(store.records.count == 2)
+
+        try FileManager.default.removeItem(at: gone)
+        await store.rebuildAllData()
+        #expect(Set(store.records.compactMap(\.requestId)) == ["msg-gone", "msg-kept"])
+        #expect(SafetyBackups.list(for: repo).count == 1)
+    }
+
+    @Test func rebuildPrunesOnlyStaleRecordsFromRereadLogs() async throws {
+        // A record the current parser no longer produces from a log that still exists is a
+        // leftover of an older parse and is pruned; a record whose log is gone is kept.
+        let dir = try makeTempDirectory("rebuild-prune")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (store, repo, logs) = try makeClaudeStore(in: dir)
+        let log = logs.appendingPathComponent("session.jsonl")
+        try (claudeUsageLine(messageId: "msg-live", input: 10) + "\n").write(to: log, atomically: true, encoding: .utf8)
+        await store.refreshAll()
+        repo.upsert([
+            staleClaudeRecord(requestId: "old-parse-key", rawSource: log.path),
+            staleClaudeRecord(requestId: "orphan", rawSource: logs.appendingPathComponent("deleted.jsonl").path)
+        ])
+        await store.rebuildAllData()
+        #expect(Set(store.records.compactMap(\.requestId)) == ["msg-live", "orphan"])
+    }
+
+    @Test func rebuildKeepsRecordsFromRewrittenLogs() async throws {
+        // A log shorter than when it was last synced was rewritten rather than appended to; it no
+        // longer holds its whole history, so nothing derived from it may be pruned.
+        let dir = try makeTempDirectory("rebuild-shrunk")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (store, repo, logs) = try makeClaudeStore(in: dir)
+        let log = logs.appendingPathComponent("session.jsonl")
+        try (claudeUsageLine(messageId: "msg-live", input: 10) + "\n").write(to: log, atomically: true, encoding: .utf8)
+        await store.refreshAll()
+        repo.upsert([staleClaudeRecord(requestId: "old-parse-key", rawSource: log.path)])
+        repo.setRefreshCursor(source: .claudeCode, rawSource: log.path, position: 1_000_000)
+        await store.rebuildAllData()
+        #expect(Set(store.records.compactMap(\.requestId)) == ["msg-live", "old-parse-key"])
+    }
+
+    @Test func rebuildPruningRequiresAFullReadAndALandedUpsert() {
+        let file = "/logs/a.jsonl"
+        let live = staleClaudeRecord(requestId: "live", rawSource: file)
+        let stale = staleClaudeRecord(requestId: "stale", rawSource: file)
+        let produced: [ToolKind: Set<String>] = [.claudeCode: [live.dedupeKey]]
+        let fullRead: [ToolKind: [String: Int64]] = [.claudeCode: [file: 100]]
+        // A fully read, unshrunk log prunes its stale record…
+        #expect(RebuildPruning.staleKeys(stored: [live, stale], producedKeys: produced, fullyReadFiles: fullRead, previousCursorPositions: [:]) == [stale.dedupeKey])
+        // …but not for a source that reports no fully read files (SQLite),
+        #expect(RebuildPruning.staleKeys(stored: [live, stale], producedKeys: produced, fullyReadFiles: [:], previousCursorPositions: [:]).isEmpty)
+        // nor when the pass's records did not land in the store,
+        #expect(RebuildPruning.staleKeys(stored: [stale], producedKeys: produced, fullyReadFiles: fullRead, previousCursorPositions: [:]).isEmpty)
+        // nor for a log that shrank since the last sync,
+        #expect(RebuildPruning.staleKeys(stored: [live, stale], producedKeys: produced, fullyReadFiles: fullRead, previousCursorPositions: [RefreshCursorKey(tool: .claudeCode, rawSource: file): 200]).isEmpty)
+        // nor another tool's records.
+        let otherTool = UsageRecord(source: .openClaw, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: "other", rawSource: file)
+        #expect(RebuildPruning.staleKeys(stored: [live, otherTool], producedKeys: produced, fullyReadFiles: fullRead, previousCursorPositions: [:]).isEmpty)
+    }
+
+    @Test func jsonlAdapterReportsOnlyFullyReadFiles() async throws {
+        let dir = try makeTempDirectory("fullread")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.jsonl")
+        try (claudeUsageLine(messageId: "m1", input: 10) + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let adapter = LocalJSONLUsageAdapter(tool: .claudeCode, displayName: "Claude Test", defaultGlobPatterns: [dir.path + "/*.jsonl"], parser: LocalUsageParser.parseClaudeLine)
+        let source = UsageSource(tool: .claudeCode, name: "t", accountId: "a", apiKeyIdentity: "i")
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        let full = try await adapter.scan(source: source, pricing: [], cursorStore: repo, fullScan: true)
+        let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? -1
+        #expect(full.fullyReadFiles == [file.path: size])
+
+        // An incremental pass resumes mid-file, so it has not seen the whole file.
+        let handle = try FileHandle(forWritingTo: file)
+        handle.seekToEndOfFile()
+        handle.write(Data((claudeUsageLine(messageId: "m2", input: 5) + "\n").utf8))
+        try handle.close()
+        let incremental = try await adapter.scan(source: source, pricing: [], cursorStore: repo, fullScan: false)
+        #expect(incremental.records.map(\.requestId) == ["m2"])
+        #expect(incremental.fullyReadFiles.isEmpty)
+    }
+
+    @Test func clearLocalDataKeepsASafetySnapshot() async throws {
+        let dir = try makeTempDirectory("clear-snapshot")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        repo.upsert([UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(), inputTokens: 1, outputTokens: 1, cacheTokens: 0, requestId: "keep-me", rawSource: "r")])
+        let store = UsageStore(repository: repo, widgetSummaryURL: nil)
+        await store.clearLocalData()
+        #expect(store.records.isEmpty)
+        let snapshots = SafetyBackups.list(for: repo)
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first.map { PersistentUsageRepository(dbURL: $0).all().map(\.requestId) } == ["keep-me"])
+    }
+
+    @Test func safetyBackupsKeepOnlyTheNewest() throws {
+        let dir = try makeTempDirectory("snapshot-rotation")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        let other = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage-2.sqlite"))
+        try SafetyBackups.create(of: other, reason: "other")
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        var created: [URL] = []
+        for day in 0..<(SafetyBackups.keep + 2) {
+            created.append(try SafetyBackups.create(of: repo, reason: "test", now: start.addingTimeInterval(Double(day) * 86_400)))
+        }
+        #expect(SafetyBackups.list(for: repo) == Array(created.reversed().prefix(SafetyBackups.keep)))
+        #expect(!FileManager.default.fileExists(atPath: created[0].path))
+        #expect(SafetyBackups.list(for: other).count == 1)
+    }
+
+    // MARK: - Full backup & restore
+
+    /// Records that exercise every field: fractional timestamps, a Decimal cost, cache creation,
+    /// and a nil request id (fallback dedupe key).
+    private func backupSampleRecords() -> [UsageRecord] {
+        [
+            UsageRecord(source: .claudeCode, accountId: "acct", apiKeyHash: "key", model: "claude-opus-4-7", timestamp: Date(timeIntervalSince1970: 1_779_949_788.924), inputTokens: 70_082, outputTokens: 743, cacheTokens: 512, cacheCreationTokens: 200, estimatedCost: Decimal(string: "0.221391")!, requestId: "msg_01", rawSource: "/Users/me/.claude/projects/p/s.jsonl"),
+            UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: "gpt-5.5", timestamp: Date(timeIntervalSince1970: 1_780_000_123.456789), inputTokens: 1, outputTokens: 2, cacheTokens: 3, estimatedCost: Decimal(string: "0.000000123")!, requestId: nil, rawSource: "/Users/me/.codex/sessions/r.jsonl"),
+            UsageRecord(source: .hermes, accountId: "u", apiKeyHash: "p", model: "m", timestamp: Date(timeIntervalSince1970: 1_700_000_000), inputTokens: 5, outputTokens: 0, cacheTokens: 0, estimatedCost: 12.5, requestId: "", rawSource: "~/.hermes/state.db:sessions")
+        ]
+    }
+
+    @Test func backupRoundTripsEveryFieldExactly() throws {
+        let dir = try makeTempDirectory("backup-roundtrip")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = PersistentUsageRepository(dbURL: dir.appendingPathComponent("source.sqlite"))
+        source.upsert(backupSampleRecords())
+        source.savePricing([ModelPricing(tool: .codeX, model: "gpt-5.5", inputPerMillion: Decimal(string: "1.25")!, outputPerMillion: 10, cachePerMillion: Decimal(string: "0.125")!)])
+        source.saveBudgets([BudgetRule(period: .daily, tokenLimit: 123_456, costLimit: Decimal(string: "7.89")!)])
+        let exportedAt = Date(timeIntervalSince1970: 1_790_000_000)
+        let backup = try source.exportBackup(exportedAt: exportedAt)
+        let file = dir.appendingPathComponent("backup.json")
+        try BackupService.write(backup, to: file)
+        let reread = try BackupService.read(from: file)
+        #expect(reread == backup)
+
+        let restored = PersistentUsageRepository(dbURL: dir.appendingPathComponent("restored.sqlite"))
+        let inserted = try restored.importBackupRecords(reread.records)
+        #expect(inserted == 3)
+        try restored.restoreSettings(pricing: reread.pricing, budgets: reread.budgets)
+        let roundTripped = try restored.exportBackup(exportedAt: exportedAt)
+        #expect(roundTripped == backup)
+        #expect(Set(restored.all()) == Set(source.all()))
+    }
+
+    @Test func backupImportNeverChangesExistingRecords() throws {
+        let dir = try makeTempDirectory("backup-merge")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        let local = UsageRecord(source: .claudeCode, accountId: "a", apiKeyHash: "k", model: "m", timestamp: Date(timeIntervalSince1970: 1_780_000_000), inputTokens: 100, outputTokens: 1, cacheTokens: 0, requestId: "shared", rawSource: "/logs/a.jsonl")
+        repo.upsert([local])
+        var importedCopy = UsageBackup.Record(dedupeKey: local.dedupeKey, id: UUID().uuidString, source: "ClaudeCode", accountId: "a", apiKeyHash: "k", model: "m", timestamp: 1_780_000_000, inputTokens: 999, outputTokens: 1, cacheTokens: 0, cacheCreationTokens: 0, estimatedCost: 9, requestId: "shared", rawSource: "/elsewhere/a.jsonl")
+        let added = UsageBackup.Record(dedupeKey: "ClaudeCode::request::new", id: UUID().uuidString, source: "ClaudeCode", accountId: "a", apiKeyHash: "k", model: "m", timestamp: 1_780_000_100, inputTokens: 7, outputTokens: 1, cacheTokens: 0, cacheCreationTokens: 0, estimatedCost: 0, requestId: "new", rawSource: "/elsewhere/b.jsonl")
+        let backup = UsageBackup(exportedAt: Date(), appVersion: nil, records: [importedCopy, added, added], pricing: [], budgets: [])
+        let preview = BackupImportPreview(backup: backup, existingKeys: try repo.allDedupeKeys())
+        #expect(preview.newRecordCount == 1)
+        #expect(preview.existingRecordCount == 1)
+        let inserted = try repo.importBackupRecords(backup.records)
+        #expect(inserted == 1)
+        let stored = Dictionary(uniqueKeysWithValues: repo.all().map { ($0.dedupeKey, $0) })
+        // The local copy keeps its own values; the new record is stored.
+        #expect(stored[local.dedupeKey]?.inputTokens == 100)
+        #expect(stored["ClaudeCode::request::new"]?.inputTokens == 7)
+        importedCopy.inputTokens = 1
+        let reinserted = try repo.importBackupRecords([importedCopy, added])
+        #expect(reinserted == 0)
+    }
+
+    @Test func backupRejectsForeignNewerAndTruncatedFiles() throws {
+        func error(decoding json: String) -> BackupError? {
+            do { _ = try BackupService.decode(Data(json.utf8)); return nil } catch { return error as? BackupError }
+        }
+        #expect(error(decoding: "{}") == .notABackup)
+        #expect(error(decoding: "[1,2]") == .notABackup)
+        #expect(error(decoding: #"{"format":"tokenscope-backup","formatVersion":99}"#) == .newerFormat(99))
+        var truncated = try #require(try JSONSerialization.jsonObject(with: BackupService.encode(UsageBackup(exportedAt: Date(), appVersion: nil, records: [], pricing: [], budgets: []))) as? [String: Any])
+        truncated["recordCount"] = 5
+        let truncatedJSON = try #require(String(data: try JSONSerialization.data(withJSONObject: truncated), encoding: .utf8))
+        #expect(error(decoding: truncatedJSON) == .incomplete(expected: 5, found: 0))
+
+        let dir = try makeTempDirectory("backup-foreign")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let foreign = dir.appendingPathComponent("other.sqlite")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(foreign.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "CREATE TABLE notes (body TEXT)", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+        #expect(throws: BackupError.notABackup) { try BackupService.read(from: foreign) }
+    }
+
+    @Test func backupKeepsRecordsOfUnknownTools() throws {
+        // A backup from a newer app may hold a tool this version doesn't know. Its rows are stored
+        // (invisible until an update) and carried into later backups instead of being dropped.
+        let dir = try makeTempDirectory("backup-unknown-tool")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        let future = UsageBackup.Record(dedupeKey: "FutureTool::request::1", id: UUID().uuidString, source: "FutureTool", accountId: "a", apiKeyHash: "k", model: "m", timestamp: 1_780_000_000, inputTokens: 1, outputTokens: 1, cacheTokens: 0, cacheCreationTokens: 0, estimatedCost: 0, requestId: "1", rawSource: "r")
+        let preview = BackupImportPreview(backup: UsageBackup(exportedAt: Date(), appVersion: nil, records: [future], pricing: [], budgets: []), existingKeys: [])
+        #expect(preview.unsupportedToolRecordCount == 1)
+        let inserted = try repo.importBackupRecords([future])
+        #expect(inserted == 1)
+        #expect(repo.all().isEmpty)
+        let next = try repo.exportBackup()
+        #expect(next.records == [future])
+    }
+
+    @Test func storeRestoresFromSafetySnapshot() async throws {
+        // End to end: clearing writes a snapshot; importing that snapshot brings every record back,
+        // and the snapshot file itself is never modified by being read.
+        let dir = try makeTempDirectory("backup-restore-snapshot")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        repo.upsert(backupSampleRecords())
+        let store = UsageStore(repository: repo, widgetSummaryURL: nil)
+        store.selectedRange = .today
+        let exported = try await store.exportBackup(to: dir.appendingPathComponent("full.json"))
+        #expect(exported == 3)
+
+        let original = Set(repo.all())
+        await store.clearLocalData()
+        let snapshot = try #require(SafetyBackups.list(for: repo).first)
+        let before = try Data(contentsOf: snapshot)
+        let preview = try await store.prepareImport(from: snapshot)
+        #expect(preview.newRecordCount == 3)
+        let added = try await store.applyImport(preview, restoreSettings: false)
+        #expect(added == 3)
+        #expect(Set(store.records) == original)
+        #expect(try Data(contentsOf: snapshot) == before)
+    }
+
+    // MARK: - Codex dedupe key
+
+    private let codexTokenLine = #"{"timestamp":"2026-06-06T09:30:23.500Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":17,"cached_input_tokens":7,"output_tokens":3,"total_tokens":20}}}}"#
+
+    private var codexEventDate: Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: "2026-06-06T09:30:23.500Z")!
+    }
+
+    /// A record as the previous parser stored `codexTokenLine` at `path`: the request id embeds the
+    /// full path, then the event's timestamp and token counts (input already net of cached).
+    private func legacyCodexRecord(path: String) -> UsageRecord {
+        UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: "gpt-5.5", timestamp: codexEventDate, inputTokens: 10, outputTokens: 3, cacheTokens: 7, requestId: "\(path)#\(codexEventDate.timeIntervalSince1970)#10#3#7", rawSource: path)
+    }
+
+    private func sqliteCount(_ path: String) throws -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else { throw CocoaError(.fileReadUnknown) }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM usage_records", -1, &statement, nil) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW else { throw CocoaError(.fileReadCorruptFile) }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    @Test func codexKeyIgnoresTheSessionFilesDirectory() {
+        // Codex moves a session's file to archived_sessions/ when it is archived; the same events
+        // must keep the same key there.
+        let live = LocalUsageParser.parseCodexLine(codexTokenLine, filePath: "/Users/me/.codex/sessions/2026/06/06/rollout-A.jsonl", pricing: [])
+        let archived = LocalUsageParser.parseCodexLine(codexTokenLine, filePath: "/Users/me/.codex/archived_sessions/rollout-A.jsonl", pricing: [])
+        #expect(live != nil)
+        #expect(live?.dedupeKey == archived?.dedupeKey)
+        #expect(live?.requestId?.hasPrefix("rollout-A.jsonl#") == true)
+        #expect(live?.rawSource == "/Users/me/.codex/sessions/2026/06/06/rollout-A.jsonl")
+    }
+
+    @Test func codexKeyMigrationCollapsesArchivedDuplicates() throws {
+        let dir = try makeTempDirectory("codex-migration")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let archivedDir = dir.appendingPathComponent("archived_sessions")
+        try FileManager.default.createDirectory(at: archivedDir, withIntermediateDirectories: true)
+        let archived = archivedDir.appendingPathComponent("rollout-A.jsonl")
+        try (codexTokenLine + "\n").write(to: archived, atomically: true, encoding: .utf8)
+        let moved = dir.appendingPathComponent("sessions/2026/06/06/rollout-A.jsonl").path
+        let deletedSession = dir.appendingPathComponent("sessions/2026/05/01/rollout-B.jsonl").path
+        let dbURL = dir.appendingPathComponent("usage.sqlite")
+
+        // A database written by the previous version: the archived session is stored under both of
+        // its paths, plus another Codex session and a Claude record.
+        let claude = staleClaudeRecord(requestId: "msg_1", rawSource: "/logs/c.jsonl")
+        PersistentUsageRepository(dbURL: dbURL).upsert([legacyCodexRecord(path: moved), legacyCodexRecord(path: archived.path), legacyCodexRecord(path: deletedSession), claude])
+
+        let migrated = PersistentUsageRepository(dbURL: dbURL)
+        let codex = migrated.all().filter { $0.source == .codeX }
+        #expect(codex.count == 2)
+        let fresh = try #require(LocalUsageParser.parseCodexLine(codexTokenLine, filePath: archived.path, pricing: []))
+        // The migrated key equals what the parser now produces, and the copy whose log exists wins.
+        let kept = try #require(codex.first { $0.dedupeKey == fresh.dedupeKey })
+        #expect(kept.rawSource == archived.path)
+        #expect(codex.contains { $0.requestId?.hasPrefix("rollout-B.jsonl#") == true })
+        #expect(migrated.all().contains { $0.dedupeKey == claude.dedupeKey })
+
+        let snapshots = SafetyBackups.list(for: migrated)
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.lastPathComponent.contains("before-codex-key-migration") == true)
+        #expect(try sqliteCount(try #require(snapshots.first).path) == 4)
+        _ = PersistentUsageRepository(dbURL: dbURL)
+        #expect(SafetyBackups.list(for: migrated).count == 1)
+    }
+
+    @Test func codexKeyMigrationPlanDefersToCurrentRows() {
+        let old = CodexDedupeKey.StoredRow(dedupeKey: "CodeX::request::/a/rollout-A.jsonl#1#2#3#4", requestId: "/a/rollout-A.jsonl#1#2#3#4", rawSource: "/a/rollout-A.jsonl")
+        let newKey = "CodeX::request::rollout-A.jsonl#1#2#3#4"
+        // A row already under the new key wins; the old copy is deleted.
+        let plan = CodexDedupeKey.migrationPlan(oldRows: [old], existingKeys: [newKey]) { _ in false }
+        #expect(plan.rekey.isEmpty)
+        #expect(plan.delete == [old.dedupeKey])
+        // A lone old row is simply re-keyed.
+        let fresh = CodexDedupeKey.migrationPlan(oldRows: [old], existingKeys: []) { _ in false }
+        #expect(fresh.rekey == [CodexDedupeKey.Rekey(oldKey: old.dedupeKey, newKey: newKey, newRequestId: "rollout-A.jsonl#1#2#3#4")])
+        #expect(fresh.delete.isEmpty)
+        #expect(CodexDedupeKey.migratedRequestId("rollout-A.jsonl#1#2#3#4", rawSource: "/a/rollout-A.jsonl") == nil)
+        #expect(CodexDedupeKey.migratedRequestId("x.jsonl#1", rawSource: "x.jsonl") == nil)
+    }
+
+    @Test func backupImportRekeysOldCodexRecords() throws {
+        // A backup taken before the key change still holds full-path Codex keys; the import must
+        // match them to this database's records instead of adding them a second time.
+        let path = "/Users/me/.codex/sessions/2026/06/06/rollout-A.jsonl"
+        let legacy = legacyCodexRecord(path: path)
+        let record = UsageBackup.Record(dedupeKey: legacy.dedupeKey, id: legacy.id.uuidString, source: "CodeX", accountId: legacy.accountId, apiKeyHash: legacy.apiKeyHash, model: legacy.model, timestamp: legacy.timestamp.timeIntervalSince1970, inputTokens: 10, outputTokens: 3, cacheTokens: 7, cacheCreationTokens: 0, estimatedCost: 0, requestId: legacy.requestId, rawSource: path)
+        let current = try #require(LocalUsageParser.parseCodexLine(codexTokenLine, filePath: "/elsewhere/archived_sessions/rollout-A.jsonl", pricing: []))
+        let preview = BackupImportPreview(backup: UsageBackup(exportedAt: Date(), appVersion: nil, records: [record], pricing: [], budgets: []), existingKeys: [current.dedupeKey])
+        #expect(preview.existingRecordCount == 1)
+        #expect(preview.newRecordCount == 0)
+        #expect(preview.backup.records.first?.dedupeKey == current.dedupeKey)
     }
 }

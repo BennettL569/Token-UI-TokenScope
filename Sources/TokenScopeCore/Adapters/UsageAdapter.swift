@@ -10,12 +10,47 @@ public struct AdapterCapabilities: OptionSet, Codable, Hashable, Sendable {
     public static let supportsCostEstimation = AdapterCapabilities(rawValue: 1 << 3)
 }
 
+/// What one adapter pass produced.
+public struct AdapterScanResult: Sendable {
+    public var records: [UsageRecord]
+    /// Append-only log files this pass read from the first byte to the end, with the number of
+    /// bytes read. A full rebuild treats each as the complete record of what that file contains
+    /// (see `RebuildPruning`).
+    public var fullyReadFiles: [String: Int64]
+
+    public init(records: [UsageRecord], fullyReadFiles: [String: Int64] = [:]) {
+        self.records = records
+        self.fullyReadFiles = fullyReadFiles
+    }
+}
+
 public protocol UsageAdapter: Sendable {
     var id: String { get }
     var tool: ToolKind { get }
     var displayName: String { get }
     var capabilities: AdapterCapabilities { get }
     func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore?, fullScan: Bool) async throws -> [UsageRecord]
+    /// `refresh` plus which append-only files were read in full. The default reports none, so a
+    /// rebuild never prunes a source it can't vouch for — the SQLite databases in particular can
+    /// lose rows (a deleted session) while the file itself stays.
+    func scan(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore?, fullScan: Bool) async throws -> AdapterScanResult
+}
+
+public extension UsageAdapter {
+    func scan(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore?, fullScan: Bool) async throws -> AdapterScanResult {
+        AdapterScanResult(records: try await refresh(source: source, pricing: pricing, cursorStore: cursorStore, fullScan: fullScan))
+    }
+}
+
+/// Identifies one refresh cursor: a tool and the file (or database) it reads.
+public struct RefreshCursorKey: Hashable, Sendable {
+    public var tool: ToolKind
+    public var rawSource: String
+
+    public init(tool: ToolKind, rawSource: String) {
+        self.tool = tool
+        self.rawSource = rawSource
+    }
 }
 
 public protocol UsageCursorStore: Sendable {

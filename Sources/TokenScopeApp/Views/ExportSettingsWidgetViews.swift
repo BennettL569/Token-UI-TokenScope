@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import TokenScopeCore
 
 struct ExportView: View {
@@ -7,27 +8,26 @@ struct ExportView: View {
     @State private var format: ExportFormat = .csv
     @State private var includeIdentifiers = false
     @State private var preview = ""
+    @State private var backupBusy = false
+    @State private var backupStatus: String?
+    @State private var pendingImport: BackupImportPreview?
+    @State private var showImportConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HeaderBar(title: lang.select("Export / Import", "导出 / 导入"), subtitle: lang.select("Export CSV/JSON; explicitly choose whether to include account / API identifiers before exporting", "导出 CSV/JSON；导出前明确选择是否包含账号/API 标识"))
+            HeaderBar(title: lang.select("Export / Import", "导出 / 导入"), subtitle: lang.select("Full backup and restore, plus CSV/JSON reports of the current view", "完整备份与恢复，以及当前视图的 CSV/JSON 报表"))
+            backupPanel
             GlassPanel {
                 VStack(alignment: .leading, spacing: 14) {
+                    Text(lang.select("Report export", "报表导出")).font(.headline)
                     Picker(lang.select("Format", "格式"), selection: $format) {
                         ForEach(ExportFormat.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 260)
                     Toggle(lang.select("Include account / API Key identifiers in export (off by default)", "导出中包含账号/API Key 标识（默认关闭）"), isOn: $includeIdentifiers)
-                    HStack {
-                        Button(lang.select("Generate export preview", "生成导出预览")) {
-                            preview = (try? ExportService.export(records: store.filteredRecords(), format: format, includeIdentifiers: includeIdentifiers)) ?? lang.select("Export failed", "导出失败")
-                        }
-                        Button(lang.select("Import JSON/CSV history", "导入 JSON/CSV 历史数据")) {}
-                            .disabled(true)
-                        Text(lang.select("CSV import UI is reserved; the standard JSON import service is implemented.", "CSV 导入 UI 已预留；JSON 标准导入服务已实现。"))
-                            .font(.caption)
-                            .foregroundStyle(Color.scopeTextMuted)
+                    Button(lang.select("Generate export preview", "生成导出预览")) {
+                        preview = (try? ExportService.export(records: store.filteredRecords(), format: format, includeIdentifiers: includeIdentifiers)) ?? lang.select("Export failed", "导出失败")
                     }
                     TextEditor(text: $preview)
                         .font(.system(.caption, design: .monospaced))
@@ -37,6 +37,128 @@ struct ExportView: View {
                 }
             }
         }
+        .confirmationDialog(lang.select("Import this backup?", "导入这个备份？"), isPresented: $showImportConfirmation, titleVisibility: .visible, presenting: pendingImport) { preview in
+            let hasSettings = !preview.backup.pricing.isEmpty || !preview.backup.budgets.isEmpty
+            if preview.newRecordCount > 0 {
+                Button(lang.select("Import \(preview.newRecordCount.formatted()) new records", "导入 \(preview.newRecordCount.formatted()) 条新记录")) { applyImport(preview, restoreSettings: false) }
+            }
+            if hasSettings {
+                Button(preview.newRecordCount > 0
+                       ? lang.select("Import records and restore pricing & budgets", "导入记录并恢复价格表和预算")
+                       : lang.select("Restore pricing & budgets", "恢复价格表和预算")) { applyImport(preview, restoreSettings: true) }
+            }
+            Button(lang.select("Cancel", "取消"), role: .cancel) {}
+        } message: { preview in
+            Text(importSummary(preview))
+        }
+    }
+
+    private var backupPanel: some View {
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(lang.select("Full backup", "完整备份")).font(.headline)
+                Text(lang.select("Saves every record (not limited by the current filters) plus pricing and budgets to one file. Importing it into TokenScope on any Mac brings all of that data back. The file contains local file paths and account identifiers, so keep it private.", "把全部记录（不受当前筛选影响）以及价格表和预算保存成一个文件，在任何一台 Mac 的 TokenScope 中导入即可拿回全部数据。文件包含本机路径和账号标识，请妥善保管。"))
+                    .font(.caption)
+                    .foregroundStyle(Color.scopeTextMuted)
+                HStack {
+                    Button(action: exportBackup) {
+                        Label(lang.select("Export full backup…", "导出完整备份…"), systemImage: "square.and.arrow.up")
+                    }
+                    Button(action: chooseBackupToImport) {
+                        Label(lang.select("Import backup…", "导入备份…"), systemImage: "square.and.arrow.down")
+                    }
+                    Button(action: openSafetyBackups) {
+                        Label(lang.select("Automatic backups", "自动备份"), systemImage: "folder")
+                    }
+                }
+                .disabled(backupBusy || store.isRefreshing)
+                Text(lang.select("Importing only adds records this database doesn't have yet. It never changes or deletes existing data, and the database is backed up automatically first. You can also import one of the automatic backups (.sqlite), which are saved before every full re-read, clear and import.", "导入只会新增本机还没有的记录，不会修改或删除任何现有数据，导入前也会先自动备份数据库。也可以导入「自动备份」里的 .sqlite 文件，每次全量重读、清除数据和导入之前都会自动生成。"))
+                    .font(.caption)
+                    .foregroundStyle(Color.scopeTextMuted)
+                if let backupStatus {
+                    Text(backupStatus)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "TokenScope-backup-\(Date().formatted(.iso8601.year().month().day())).json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        backupBusy = true
+        backupStatus = lang.select("Exporting…", "正在导出…")
+        Task {
+            defer { backupBusy = false }
+            do {
+                let count = try await store.exportBackup(to: url)
+                backupStatus = lang.select("Exported \(count.formatted()) records to \(url.lastPathComponent); the file was read back and verified.", "已导出 \(count.formatted()) 条记录到 \(url.lastPathComponent)，并已回读校验无误。")
+            } catch {
+                backupStatus = describe(error)
+            }
+        }
+    }
+
+    private func chooseBackupToImport() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, UTType(filenameExtension: "sqlite") ?? .database]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        backupBusy = true
+        backupStatus = lang.select("Reading backup…", "正在读取备份…")
+        Task {
+            defer { backupBusy = false }
+            do {
+                pendingImport = try await store.prepareImport(from: url)
+                backupStatus = nil
+                showImportConfirmation = true
+            } catch {
+                backupStatus = describe(error)
+            }
+        }
+    }
+
+    private func applyImport(_ preview: BackupImportPreview, restoreSettings: Bool) {
+        backupBusy = true
+        backupStatus = lang.select("Importing…", "正在导入…")
+        Task {
+            defer { backupBusy = false }
+            do {
+                let added = try await store.applyImport(preview, restoreSettings: restoreSettings)
+                let settingsNote = restoreSettings ? lang.select(" Pricing and budgets were restored.", "价格表和预算已恢复。") : ""
+                backupStatus = lang.select("Added \(added.formatted()) records.", "已新增 \(added.formatted()) 条记录。") + settingsNote
+            } catch {
+                backupStatus = describe(error)
+            }
+        }
+    }
+
+    private func openSafetyBackups() {
+        let directory = store.safetyBackupDirectory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(directory)
+    }
+
+    private func importSummary(_ preview: BackupImportPreview) -> String {
+        let date = preview.backup.exportedAt.formatted(date: .abbreviated, time: .shortened)
+        let total = preview.newRecordCount + preview.existingRecordCount
+        var text = preview.newRecordCount == 0
+            ? lang.select("Backup from \(date): all \(total.formatted()) records are already on this Mac.", "备份时间 \(date)：全部 \(total.formatted()) 条记录本机都已有。")
+            : lang.select("Backup from \(date) with \(total.formatted()) records: \(preview.existingRecordCount.formatted()) are already here and stay as they are; \(preview.newRecordCount.formatted()) will be added.", "备份时间 \(date)，共 \(total.formatted()) 条记录：本机已有 \(preview.existingRecordCount.formatted()) 条（保持不变），将新增 \(preview.newRecordCount.formatted()) 条。")
+        if preview.unsupportedToolRecordCount > 0 {
+            text += lang.select(" \(preview.unsupportedToolRecordCount.formatted()) of them come from tools this version doesn't support yet; they are kept and appear after an update.", "其中 \(preview.unsupportedToolRecordCount.formatted()) 条来自当前版本还不支持的工具，会先保存，升级后显示。")
+        }
+        return text
+    }
+
+    private func describe(_ error: Error) -> String {
+        if let backupError = error as? BackupError { return backupError.message(lang) }
+        return lang.select("Failed: \(error.localizedDescription)", "失败：\(error.localizedDescription)")
     }
 }
 
@@ -97,11 +219,11 @@ struct SettingsView: View {
                 }
             }
         }
-        .confirmationDialog(lang.select("Clear all local usage statistics? This cannot be undone.", "确认清除所有本地 usage 统计？此操作不可撤销。"), isPresented: $confirmClear, titleVisibility: .visible) {
+        .confirmationDialog(lang.select("Clear all local usage statistics? A safety backup of the database is saved first; you can restore it from Export / Import.", "确认清除所有本地 usage 统计？清除前会自动保存一份数据库安全备份，可在「导出 / 导入」页恢复。"), isPresented: $confirmClear, titleVisibility: .visible) {
             Button(lang.select("Clear", "清除"), role: .destructive) { Task { await store.clearLocalData() } }
             Button(lang.select("Cancel", "取消"), role: .cancel) {}
         }
-        .confirmationDialog(lang.select("Re-read all token data from scratch? This clears the current stats and rescans every configured data source, which takes longer than a normal incremental refresh.", "确认从头重读全部 Token 数据？这会清空当前统计并重新扫描全部已配置数据源，耗时会比普通增量刷新更长。"), isPresented: $confirmFullRebuild, titleVisibility: .visible) {
+        .confirmationDialog(lang.select("Re-read all token data from scratch? Every configured data source is rescanned, which takes longer than a normal incremental refresh. Records whose original logs no longer exist are kept, and the database is backed up first.", "确认从头重读全部 Token 数据？这会重新扫描全部已配置数据源，耗时会比普通增量刷新更长。原始日志已不存在的历史记录会保留，开始前会自动备份数据库。"), isPresented: $confirmFullRebuild, titleVisibility: .visible) {
             Button(lang.select("Full rebuild", "全量重读"), role: .destructive) { Task { await store.rebuildAllData() } }
             Button(lang.select("Cancel", "取消"), role: .cancel) {}
         }

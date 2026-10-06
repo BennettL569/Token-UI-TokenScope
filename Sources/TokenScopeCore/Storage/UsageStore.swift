@@ -86,6 +86,9 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
 
     private let repository: PersistentUsageRepository
     private let registry: AdapterRegistry
+    /// Where each refresh writes the widget summary; nil skips it (tests, so they never overwrite
+    /// the real widget's data).
+    private let widgetSummaryURL: URL?
 
     /// The running auto-refresh loop, if any. A single repeating `Task` that sleeps for the chosen
     /// interval then runs an incremental `refreshAll()`. Restarting cancels the old one first, so
@@ -132,9 +135,10 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// last edit wins. The repository itself is internally locked and Sendable.
     private let writeQueue = DispatchQueue(label: "com.tokenscope.repository-write", qos: .utility)
 
-    public init(repository: PersistentUsageRepository = PersistentUsageRepository(), registry: AdapterRegistry = AdapterRegistry()) {
+    public init(repository: PersistentUsageRepository = PersistentUsageRepository(), registry: AdapterRegistry = AdapterRegistry(), widgetSummaryURL: URL? = WidgetSummaryStore.defaultURL()) {
         self.repository = repository
         self.registry = registry
+        self.widgetSummaryURL = widgetSummaryURL
         self.language = UserDefaults.standard.string(forKey: Self.languageDefaultsKey).flatMap(AppLanguage.init(rawValue:)) ?? .english
         self.autoRefreshEnabled = UserDefaults.standard.bool(forKey: Self.autoRefreshEnabledDefaultsKey)
         self.autoRefreshInterval = UserDefaults.standard.string(forKey: Self.autoRefreshIntervalDefaultsKey).flatMap(RefreshInterval.init(rawValue:)) ?? .oneMinute
@@ -206,15 +210,30 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
 
     /// The actual refresh work. Assumes the caller (`refreshAll` or `rebuildAllData`) already holds
     /// the `isRefreshing` gate across the whole operation, so it never toggles the flag itself.
+    /// `pruneStaleRecords` (full scans only) deletes leftovers of older parses afterwards; see
+    /// `RebuildPruning` for exactly what qualifies.
     @MainActor
-    private func performRefresh(fullScan: Bool = false) async {
+    private func performRefresh(fullScan: Bool = false, pruneStaleRecords: Bool = false) async {
         refreshProgress = fullScan ? L("Preparing full rescan", "准备全量重读") : L("Preparing incremental sync", "准备增量同步")
         errorMessage = nil
         // The repository is thread-safe (NSLock) and Sendable, so its heavy synchronous
         // work (writing new rows, reloading the full table) is run off the main thread via
         // detached tasks; only the UI-facing @Published mutations happen on the main actor.
         let repo = repository
-        if fullScan { await Task.detached { repo.clearRefreshCursors() }.value }
+        // A full scan re-reads every log from byte 0, so it starts from fresh cursors. Note where
+        // each cursor stood first: a log now shorter than that was rewritten, and pruning leaves
+        // records derived from it alone.
+        var previousCursors: [RefreshCursorKey: Double] = [:]
+        if fullScan {
+            previousCursors = await Task.detached {
+                let cursors = repo.allRefreshCursors()
+                repo.clearRefreshCursors()
+                return cursors
+            }.value
+        }
+        let pruning = fullScan && pruneStaleRecords
+        var producedKeys: [ToolKind: Set<String>] = [:]
+        var fullyReadFiles: [ToolKind: [String: Int64]] = [:]
         var refreshedSources = sources
         var errors: [String] = []
         for index in refreshedSources.indices where refreshedSources[index].isEnabled {
@@ -225,8 +244,13 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
             sources = refreshedSources
             refreshProgress = L("Reading \(source.tool.rawValue)…", "正在\(fullScan ? "全量" : "增量")读取 \(source.tool.rawValue)…")
             do {
-                let newRecords = try await adapter.refresh(source: source, pricing: pricing, cursorStore: repo, fullScan: fullScan)
+                let result = try await adapter.scan(source: source, pricing: pricing, cursorStore: repo, fullScan: fullScan)
+                let newRecords = result.records
                 await Task.detached { repo.upsert(newRecords) }.value
+                if pruning {
+                    producedKeys[source.tool, default: []].formUnion(newRecords.map(\.dedupeKey))
+                    fullyReadFiles[source.tool, default: [:]].merge(result.fullyReadFiles) { max($0, $1) }
+                }
                 refreshedSources[index].syncStatus = SyncStatus(kind: .success, lastSync: Date(), message: L("Synced \(newRecords.count) new/updated", "已同步 \(newRecords.count) 条新增/更新"))
             } catch {
                 errors.append("\(source.tool.rawValue): \(error.localizedDescription)")
@@ -234,14 +258,19 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
             }
         }
         sources = refreshedSources
-        let reloaded = await Task.detached { repo.all() }.value
+        var reloaded = await Task.detached { repo.all() }.value
+        if pruning {
+            let stale = RebuildPruning.staleKeys(stored: reloaded, producedKeys: producedKeys, fullyReadFiles: fullyReadFiles, previousCursorPositions: previousCursors)
+            if !stale.isEmpty {
+                reloaded = await Task.detached {
+                    repo.deleteRecords(dedupeKeys: stale)
+                    return repo.all()
+                }.value
+            }
+        }
         records = reloaded
         rebuildDashboardSnapshot()
-        // The widget summary walks the full record set several times; compute it off-main.
-        let budgetsSnapshot = budgets
-        let mode = budgetProgressMode
-        let summary = await Task.detached { UsageStore.makeWidgetSummary(records: reloaded, budgets: budgetsSnapshot, budgetProgressMode: mode) }.value
-        try? WidgetSummaryStore.save(summary)
+        await writeWidgetSummary(records: reloaded)
         errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
         refreshProgress = errors.isEmpty ? L("Sync complete: \(records.count) records", "同步完成：\(records.count) 条") : L("Sync finished with \(errors.count) error(s)", "同步完成，有 \(errors.count) 个错误")
     }
@@ -306,18 +335,23 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         writeQueue.async { repo.savePricing(snapshot) }
     }
 
+    /// Re-reads every configured log from scratch. This used to empty the table first, which
+    /// permanently lost every record whose log was already gone (Claude Code keeps transcripts for
+    /// 30 days). Now it upserts what it reads and prunes only provably stale leftovers — and only
+    /// once a safety snapshot of the current database exists.
     @MainActor
     public func rebuildAllData() async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        let repo = repository
-        await Task.detached { repo.clear() }.value
-        records = []
-        rebuildDashboardSnapshot()
+        let snapshotError = await writeSafetySnapshot(reason: "before-rebuild")
         // Call performRefresh, not refreshAll: the gate is already held here, and refreshAll's
         // reentrancy guard would otherwise turn this nested refresh into a no-op.
-        await performRefresh(fullScan: true)
+        await performRefresh(fullScan: true, pruneStaleRecords: snapshotError == nil)
+        if let snapshotError {
+            let note = L("Could not write a safety backup (\(snapshotError.localizedDescription)), so no records were pruned.", "无法写入安全备份（\(snapshotError.localizedDescription)），本次未清理任何记录。")
+            errorMessage = [errorMessage, note].compactMap { $0 }.joined(separator: "\n")
+        }
     }
 
     @MainActor
@@ -327,10 +361,96 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+        // Usage whose logs are gone can't be re-read, so never clear without a snapshot to restore
+        // it from.
+        if let snapshotError = await writeSafetySnapshot(reason: "before-clear") {
+            errorMessage = L("Could not write a safety backup (\(snapshotError.localizedDescription)); nothing was cleared.", "无法写入安全备份（\(snapshotError.localizedDescription)），未清除任何数据。")
+            return
+        }
         let repo = repository
         await Task.detached { repo.clear() }.value
         records = []
         rebuildDashboardSnapshot()
+    }
+
+    // MARK: - Backup & restore
+
+    /// Where the automatic safety snapshots are kept.
+    public var safetyBackupDirectory: URL { repository.safetyBackupDirectory }
+
+    /// Writes a full backup — every record regardless of the active filters, plus pricing and
+    /// budgets — to `url`, and verifies it reads back identically. Returns the number of records.
+    public func exportBackup(to url: URL) async throws -> Int {
+        let repo = repository
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return try await Task.detached {
+            let backup = try repo.exportBackup(exportedAt: Date(), appVersion: appVersion)
+            try BackupService.write(backup, to: url)
+            return backup.recordCount
+        }.value
+    }
+
+    /// Reads a backup file (JSON, or a database snapshot) and works out what importing it would
+    /// add. Nothing is written.
+    public func prepareImport(from url: URL) async throws -> BackupImportPreview {
+        let repo = repository
+        return try await Task.detached {
+            let backup = try BackupService.read(from: url)
+            return BackupImportPreview(backup: backup, existingKeys: try repo.allDedupeKeys())
+        }.value
+    }
+
+    /// Adds the backup's records that aren't stored yet; existing records are never changed or
+    /// removed. With `restoreSettings`, the backup's pricing and budgets also replace the local
+    /// rows for the same tool + model / period. A safety snapshot is written first, and nothing is
+    /// imported without one. Returns the number of records added.
+    @MainActor
+    public func applyImport(_ preview: BackupImportPreview, restoreSettings: Bool) async throws -> Int {
+        guard !isRefreshing else { throw BackupError.busy }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        if let snapshotError = await writeSafetySnapshot(reason: "before-import") { throw snapshotError }
+        let repo = repository
+        let backup = preview.backup
+        let inserted = try await Task.detached {
+            let inserted = try repo.importBackupRecords(backup.records)
+            if restoreSettings { try repo.restoreSettings(pricing: backup.pricing, budgets: backup.budgets) }
+            return inserted
+        }.value
+        if restoreSettings {
+            pricing = repo.loadPricing()
+            budgets = Self.orderedBudgets(repo.loadBudgets())
+        }
+        let reloaded = await Task.detached { repo.all() }.value
+        records = reloaded
+        rebuildDashboardSnapshot()
+        await writeWidgetSummary(records: reloaded)
+        return inserted
+    }
+
+    /// Writes a `SafetyBackups` snapshot ahead of an operation that deletes or rewrites stored
+    /// usage, returning the error if that failed. An empty database has nothing to protect, so it
+    /// is skipped — that also keeps empty snapshots from rotating out the ones that matter.
+    @MainActor
+    private func writeSafetySnapshot(reason: String) async -> Error? {
+        guard !records.isEmpty else { return nil }
+        let repo = repository
+        do {
+            _ = try await Task.detached { try SafetyBackups.create(of: repo, reason: reason) }.value
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    /// The widget summary walks the full record set several times, so it is computed off-main.
+    @MainActor
+    private func writeWidgetSummary(records: [UsageRecord]) async {
+        guard let widgetSummaryURL else { return }
+        let budgetsSnapshot = budgets
+        let mode = budgetProgressMode
+        let summary = await Task.detached { UsageStore.makeWidgetSummary(records: records, budgets: budgetsSnapshot, budgetProgressMode: mode) }.value
+        try? WidgetSummaryStore.save(summary, to: widgetSummaryURL)
     }
 
     public func filteredRecords(now: Date = Date()) -> [UsageRecord] {

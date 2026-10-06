@@ -74,11 +74,3 @@ private struct ExportRow: Codable {
         self.rawSource = includeIdentifiers ? record.rawSource : "redacted"
     }
 }
-
-public enum ImportService {
-    public static func importJSON(data: Data) throws -> [UsageRecord] {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode([UsageRecord].self, from: data)
-    }
-}

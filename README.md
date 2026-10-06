@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.16-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.17-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -50,7 +50,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 - **Bilingual UI (English / 中文)** — English by default; switch language live in Settings and the choice is persisted.
 - **Unified multi-tool tracking** — aggregates usage from Claude Code, Codex, Hermes, OpenClaw and OpenCode in one place.
 - **Local-first, zero upload** — reads local logs / SQLite only; data stays on your machine. No telemetry, no upload path.
-- **Incremental sync** — per-file resume cursors mean only newly appended data is parsed by default; a full re-read is one click away.
+- **Incremental sync** — per-file resume cursors mean only newly appended data is parsed by default; a full re-read is one click away and keeps history whose original logs are already gone.
 - **SQLite persistence** — normalized records, pricing, budgets and cursors are stored in SQLite (WAL). Records are keyed independently of sources/accounts, so historical usage survives source/account removal.
 - **Cost estimation** — per-million-token pricing; when a source already reports cost (Hermes, OpenClaw, OpenCode), the source-provided cost is preferred.
 - **Budget radar** — daily / weekly / monthly token and cost budgets, with a "by tokens" or "by cost" progress mode and 80% / 100% tiered alerts.
@@ -59,6 +59,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 - **Menu bar + widgets** — a `MenuBarExtra` mini panel (shows today's tokens or today's cost); WidgetKit widget source is included.
 - **In-app updates** — check GitHub Releases and update in place from **Settings → Updates**, with a safe backup-and-rollback swap (an interrupted update never leaves you without an app). Checks run only when you click — no background network.
 - **Export** — CSV / JSON export that **redacts** account / API-key identifiers by default.
+- **Full backup & restore** — export every record plus pricing and budgets to one verified JSON file, and import it on any Mac to get all of it back. Importing only adds missing records and never changes existing ones. The database is also snapshotted automatically before every full re-read, clear, import or data migration, and those snapshots can be imported too.
 
 ---
 
@@ -154,7 +155,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 48 checks passed (count is derived, so it stays in sync)
+#    expected: TokenScopeCoreTestsRunner: 64 checks passed (count is derived, so it stays in sync)
 
 # 2) Swift Testing suite
 swift test
@@ -210,7 +211,9 @@ flowchart TD
 
 `UsageStore` (`Storage/UsageStore.swift`) is the `ObservableObject` hub the whole UI binds to. It holds `records`, `pricing`, `budgets`, the active filters (time range / search / tool) and a precomputed `dashboardSnapshot`. Filter/range/budget changes trigger a snapshot rebuild via `didSet` — **the snapshot, not live filtering, is the dashboard's source of truth**.
 
-`refreshAll(fullScan:)` is the sync entry point: for each enabled source it resolves an adapter from `AdapterRegistry` by `ToolKind`, calls `adapter.refresh(...)`, upserts results into `PersistentUsageRepository` (SQLite), reloads `records`, rebuilds the snapshot, and writes a `WidgetSummary` to the App Group.
+`refreshAll(fullScan:)` is the sync entry point: for each enabled source it resolves an adapter from `AdapterRegistry` by `ToolKind`, calls `adapter.scan(...)`, upserts results into `PersistentUsageRepository` (SQLite), reloads `records`, rebuilds the snapshot, and writes a `WidgetSummary` to the App Group.
+
+`rebuildAllData()` (the "full re-read") never empties the database. Claude Code deletes transcripts after 30 days, so for older usage the database is the only copy. The rebuild snapshots the database, re-reads every log and upserts, then deletes only records `RebuildPruning` proves stale: ones the current parser no longer produces from an append-only log that still exists, was read in full and hasn't shrunk.
 
 ### Adapter protocol
 
@@ -224,6 +227,11 @@ public protocol UsageAdapter: Sendable {
                  pricing: [ModelPricing],
                  cursorStore: UsageCursorStore?,
                  fullScan: Bool) async throws -> [UsageRecord]
+    // Defaults to `refresh`; append-only readers also report which files they read in full.
+    func scan(source: UsageSource,
+              pricing: [ModelPricing],
+              cursorStore: UsageCursorStore?,
+              fullScan: Bool) async throws -> AdapterScanResult
 }
 ```
 
@@ -245,6 +253,8 @@ Two reusable adapter shapes: `LocalJSONLUsageAdapter` (a generic line-by-line JS
 
 Tables: `usage_records`, `model_pricing`, `budget_rules`, `refresh_cursors`. A legacy `usage-records.json` is auto-migrated once on first open.
 
+Automatic safety snapshots live in `Backups/` next to the database (`usage-<date>-<reason>.sqlite`, newest 5 kept). One is written before every full re-read, clear, import and data migration, and an operation that deletes or rewrites records doesn't run without one.
+
 ### Dedup
 
 `UsageRecord.dedupeKey` is the primary key of `usage_records`; upserts overwrite:
@@ -253,6 +263,8 @@ Tables: `usage_records`, `model_pricing`, `budget_rules`, `refresh_cursors`. A l
 - otherwise: `source::fallback::sha256(timestamp|model|tokens|source|rawSource)`
 
 Because the key is independent of source/account, **historical usage survives source or account removal**. `totalTokens = input + output + cache`, computed in the initializer.
+
+Codex events carry no id, so their request id is `<session file name>#<timestamp>#<tokens>`. It uses the file *name*, not the path, because Codex moves archived sessions from `sessions/YYYY/MM/DD/` to `archived_sessions/`. The earlier path-based key counted every archived session twice; the database is re-keyed (and those duplicates removed) automatically on open.
 
 ### Incremental sync (cursors)
 
@@ -320,6 +332,7 @@ The app does heavy work (parsing potentially **gigabytes** of local logs) withou
 - Counting usage **does not require an API key**.
 - The UI shows only account / API identity labels or masked values; real keys go through macOS Keychain via `KeychainService`.
 - Export **redacts** account / API-key identifiers by default.
+- A **full backup** is meant for restoring, so it keeps everything, including local file paths and account identifiers. Keep it private.
 
 ---
 
@@ -333,8 +346,8 @@ Token-UI-TokenScope/
 │   ├── TokenScopeCore/           # logic core
 │   │   ├── Adapters/             # UsageAdapter + per-tool adapters and parsers
 │   │   ├── Models/               # Models.swift
-│   │   ├── Services/             # Engines / ImportExport / Keychain / WidgetSummary / Config
-│   │   └── Storage/              # UsageStore / PersistentUsageRepository
+│   │   ├── Services/             # Engines / ImportExport / Backup / CodexDedupeKey / Keychain / WidgetSummary / Config
+│   │   └── Storage/              # UsageStore / PersistentUsageRepository / SafetyBackups / RebuildPruning
 │   ├── TokenScopeCoreTestsRunner/
 │   └── TokenScopeSmoke/
 ├── Tests/TokenScopeTests/        # Swift Testing suite
@@ -352,6 +365,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.17** | **Your history is kept:** a full re-read no longer empties the database first. Claude Code deletes transcripts after 30 days, so that used to permanently lose all older usage. It now keeps every record whose log is gone and prunes only provably stale leftovers, and the database is snapshotted automatically before every full re-read, clear, import and data migration (`Backups/`, newest 5 kept). **Full backup & restore:** Export / Import saves every record plus pricing and budgets to one verified JSON file that you can import on any Mac. Importing only adds missing records and never changes existing ones, and the automatic snapshots can be imported too. **Codex accuracy:** an archived Codex session (moved to `archived_sessions/`) was counted twice. Records are now keyed by the session file's name, and existing duplicates are merged automatically on first launch, so Codex totals drop by those duplicates. **Qoder fix:** Qoder usage read as zero whenever Qoder wasn't running, because its closed WAL database couldn't be opened read-only; it is now read correctly. |
 | **v1.1.16** | **Auto-refresh:** a Settings toggle plus an interval picker (1h / 30m / 10m / 5m / 1m / 30s / 10s / 5s / real-time) runs an incremental sync on a timer, skipping a tick while one is still in flight. **Tool colors:** every tool now has its own color in the tool distribution (was only Claude Code / Codex / Hermes; the rest were white), with a color swatch per row. **Clearer empty state:** when a search / tool filter matches nothing, the tool distribution says so and offers a one-click **Clear filter** instead of the misleading "no data" message. **Hardening:** all refresh triggers (timer, manual buttons, clear, full rebuild) share one reentrancy gate so they can't interleave on the main actor. Also adds the remaining Core sources to the Xcode targets so the Xcode build path matches SwiftPM. |
 | **v1.1.7** | Correctness, privacy & trust pass. **Privacy:** a redacted export no longer leaks the local file path / username (`rawSource` is gated behind the identifiers toggle). **Codex accuracy:** usage is taken only from each event's per-turn delta, never the session-cumulative total (prevents large over-counts), and file discovery keeps the **newest** sessions when a directory exceeds the cap (was non-deterministic). **Updater trust:** the downloaded build is verified (version match + valid code signature) before the in-place swap; Settings now shows release notes, last-checked time and an opt-in "check on launch". **Visibility:** sync failures now show a dashboard banner instead of silently lowering totals. Plus a single `VERSION` source of truth and a self-counting test runner. |
 | **v1.1.6** | Add an **in-app updater** in Settings. **Check for Updates** queries GitHub Releases; **Update Now** downloads the new build and replaces the app in place (backup-and-rollback swap, so a failed swap never destroys the install) then relaunches. Update Now stays disabled until a check finds a newer release that can be installed in place — if the app is running from a read-only or Gatekeeper-translocated location it routes you to the releases page instead. Checks run only on click (no automatic/background network calls). |

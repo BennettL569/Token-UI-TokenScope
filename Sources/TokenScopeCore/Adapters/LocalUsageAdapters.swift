@@ -73,7 +73,10 @@ public enum LocalUsageParser {
         guard input + output + cache > 0 else { return nil }
         let timestamp = parseDate(string(object["timestamp"])) ?? Date()
         let resolvedModel = model ?? "codex"
-        var record = UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: resolvedModel, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: "\(filePath)#\(timestamp.timeIntervalSince1970)#\(input)#\(output)#\(cache)", rawSource: filePath)
+        // Keyed on the session file's name, not its path, so a session moved to archived_sessions/
+        // isn't counted twice (see `CodexDedupeKey`).
+        let requestId = CodexDedupeKey.requestId(filePath: filePath, timestamp: timestamp, input: input, output: output, cache: cache)
+        var record = UsageRecord(source: .codeX, accountId: "Codex Local", apiKeyHash: "local-codex", model: resolvedModel, timestamp: timestamp, inputTokens: input, outputTokens: output, cacheTokens: cache, requestId: requestId, rawSource: filePath)
         record.estimatedCost = PricingEngine.estimate(record: record, pricing: pricing)
         return record
     }
@@ -405,9 +408,14 @@ public struct LocalJSONLUsageAdapter: UsageAdapter {
     }
 
     public func refresh(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore? = nil, fullScan: Bool = false) async throws -> [UsageRecord] {
+        try await scan(source: source, pricing: pricing, cursorStore: cursorStore, fullScan: fullScan).records
+    }
+
+    public func scan(source: UsageSource, pricing: [ModelPricing], cursorStore: UsageCursorStore?, fullScan: Bool) async throws -> AdapterScanResult {
         guard source.isEnabled else { throw AdapterError.sourceDisabled }
         let paths = FileDiscovery.expand(paths: source.localLogPath.isEmpty ? defaultGlobPatterns : [source.localLogPath])
         var records: [UsageRecord] = []
+        var fullyReadFiles: [String: Int64] = [:]
         for path in paths {
             guard let stream = InputStream(fileAtPath: path) else { continue }
             stream.open()
@@ -426,8 +434,13 @@ public struct LocalJSONLUsageAdapter: UsageAdapter {
                 if let record = parser(line, path, pricing, &context) { records.append(record) }
             }
             cursorStore?.setRefreshCursor(source: tool, rawSource: path, position: Double(fileSize), model: context.model)
+            // Started at byte 0 and reached the end without a read error: this pass saw the whole
+            // file, so its records are everything the current parser derives from it.
+            if startOffset == 0, !reader.hitReadError, reader.bytesRead >= fileSize {
+                fullyReadFiles[path] = reader.bytesRead
+            }
         }
-        return records
+        return AdapterScanResult(records: records, fullyReadFiles: fullyReadFiles)
     }
 
     private func skipBytes(_ count: Int64, in stream: InputStream) {
@@ -521,6 +534,10 @@ final class LineReader {
     private let stream: InputStream
     private var buffer = Data()
     private var eof = false
+    /// Bytes pulled from the stream, and whether a read failed — a failed read otherwise looks
+    /// just like end of file, so these tell the caller whether it really saw the whole file.
+    private(set) var bytesRead: Int64 = 0
+    private(set) var hitReadError = false
 
     init(stream: InputStream) { self.stream = stream }
 
@@ -541,7 +558,9 @@ final class LineReader {
             let read = stream.read(&chunk, maxLength: chunk.count)
             if read > 0 {
                 buffer.append(chunk, count: read)
+                bytesRead += Int64(read)
             } else {
+                if read < 0 { hitReadError = true }
                 eof = true
             }
         }

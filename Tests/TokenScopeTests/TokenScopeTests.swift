@@ -743,6 +743,22 @@ struct TokenScopeTests {
         #expect(incremental.fullyReadFiles.isEmpty)
     }
 
+    @Test func jsonlAdapterReadsPastInvalidUTF8() async throws {
+        // A line that isn't valid UTF-8 used to end the whole file read, silently dropping every
+        // record after it — and a full rebuild could then prune those records as stale.
+        let dir = try makeTempDirectory("bad-utf8")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.jsonl")
+        var data = Data((claudeUsageLine(messageId: "before", input: 1) + "\n").utf8)
+        data.append(contentsOf: [0x7B, 0xFF, 0xFE, 0x7D, 0x0A])
+        data.append(Data((claudeUsageLine(messageId: "after", input: 2) + "\n").utf8))
+        try data.write(to: file)
+        let adapter = LocalJSONLUsageAdapter(tool: .claudeCode, displayName: "Claude Test", defaultGlobPatterns: [dir.path + "/*.jsonl"], parser: LocalUsageParser.parseClaudeLine)
+        let result = try await adapter.scan(source: UsageSource(tool: .claudeCode, name: "t", accountId: "a", apiKeyIdentity: "i"), pricing: [], cursorStore: nil, fullScan: true)
+        #expect(result.records.compactMap(\.requestId) == ["before", "after"])
+        #expect(result.fullyReadFiles[file.path] == Int64(data.count))
+    }
+
     @Test func clearLocalDataKeepsASafetySnapshot() async throws {
         let dir = try makeTempDirectory("clear-snapshot")
         defer { try? FileManager.default.removeItem(at: dir) }

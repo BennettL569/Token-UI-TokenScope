@@ -541,16 +541,19 @@ final class LineReader {
 
     init(stream: InputStream) { self.stream = stream }
 
+    /// The next line, or nil at end of file. Invalid UTF-8 is replaced (U+FFFD) rather than
+    /// returned as nil: a nil here used to end the caller's loop, silently dropping every line
+    /// after the bad one while the file still looked fully read.
     func nextLine() -> String? {
         while true {
             if let range = buffer.firstRange(of: Data([0x0A])) {
                 let lineData = buffer.subdata(in: 0..<range.lowerBound)
                 buffer.removeSubrange(0..<range.upperBound)
-                return String(data: lineData, encoding: .utf8)
+                return String(decoding: lineData, as: UTF8.self)
             }
             if eof {
                 if buffer.isEmpty { return nil }
-                let line = String(data: buffer, encoding: .utf8)
+                let line = String(decoding: buffer, as: UTF8.self)
                 buffer.removeAll()
                 return line
             }

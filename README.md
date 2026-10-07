@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.17-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.18-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -60,6 +60,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 - **In-app updates** — check GitHub Releases and update in place from **Settings → Updates**, with a safe backup-and-rollback swap (an interrupted update never leaves you without an app). Checks run only when you click — no background network.
 - **Export** — CSV / JSON export that **redacts** account / API-key identifiers by default.
 - **Full backup & restore** — export every record plus pricing and budgets to one verified JSON file, and import it on any Mac to get all of it back. Importing only adds missing records and never changes existing ones. The database is also snapshotted automatically before every full re-read, clear, import or data migration, and those snapshots can be imported too.
+- **Windows usage export** — a small standalone program ([tools/windows-exporter](tools/windows-exporter)) exports a Windows PC's Claude Code, Claude Desktop Cowork, Codex and OpenCode usage into a backup file that the Mac app imports.
 
 ---
 
@@ -155,7 +156,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 64 checks passed (count is derived, so it stays in sync)
+#    expected: TokenScopeCoreTestsRunner: 65 checks passed (count is derived, so it stays in sync)
 
 # 2) Swift Testing suite
 swift test
@@ -355,6 +356,7 @@ Token-UI-TokenScope/
 ├── TokenScope.xcodeproj/         # mirrors the sources; only way to build the widget extension
 ├── Config/                       # entitlements / widget Info.plist
 ├── packaging/                    # build_app.sh / build_dmg.sh
+├── tools/windows-exporter/       # Go: exports a Windows PC's usage as a backup file the app imports
 ├── docs/ARCHITECTURE.md
 └── dist/                         # build output (git-ignored)
 ```
@@ -365,6 +367,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.18** | **Windows usage export:** a new standalone program ([tools/windows-exporter](tools/windows-exporter), attached to the release as `TokenScopeExport-windows-1.0.0.zip`) exports a Windows PC's Claude Code, Claude Desktop Cowork, Codex and OpenCode usage into a backup file that the Mac app imports from Export / Import. It reads only, and every exported record matches what the Mac app derives from the same log. **Log reading fix:** a log line with invalid UTF-8 no longer stops the whole file from being read. Previously every record after that line was skipped, and a full re-read could then have pruned those records as stale. |
 | **v1.1.17** | **Your history is kept:** a full re-read no longer empties the database first. Claude Code deletes transcripts after 30 days, so that used to permanently lose all older usage. It now keeps every record whose log is gone and prunes only provably stale leftovers, and the database is snapshotted automatically before every full re-read, clear, import and data migration (`Backups/`, newest 5 kept). **Full backup & restore:** Export / Import saves every record plus pricing and budgets to one verified JSON file that you can import on any Mac. Importing only adds missing records and never changes existing ones, and the automatic snapshots can be imported too. **Codex accuracy:** an archived Codex session (moved to `archived_sessions/`) was counted twice. Records are now keyed by the session file's name, and existing duplicates are merged automatically on first launch, so Codex totals drop by those duplicates. **Qoder fix:** Qoder usage read as zero whenever Qoder wasn't running, because its closed WAL database couldn't be opened read-only; it is now read correctly. |
 | **v1.1.16** | **Auto-refresh:** a Settings toggle plus an interval picker (1h / 30m / 10m / 5m / 1m / 30s / 10s / 5s / real-time) runs an incremental sync on a timer, skipping a tick while one is still in flight. **Tool colors:** every tool now has its own color in the tool distribution (was only Claude Code / Codex / Hermes; the rest were white), with a color swatch per row. **Clearer empty state:** when a search / tool filter matches nothing, the tool distribution says so and offers a one-click **Clear filter** instead of the misleading "no data" message. **Hardening:** all refresh triggers (timer, manual buttons, clear, full rebuild) share one reentrancy gate so they can't interleave on the main actor. Also adds the remaining Core sources to the Xcode targets so the Xcode build path matches SwiftPM. |
 | **v1.1.7** | Correctness, privacy & trust pass. **Privacy:** a redacted export no longer leaks the local file path / username (`rawSource` is gated behind the identifiers toggle). **Codex accuracy:** usage is taken only from each event's per-turn delta, never the session-cumulative total (prevents large over-counts), and file discovery keeps the **newest** sessions when a directory exceeds the cap (was non-deterministic). **Updater trust:** the downloaded build is verified (version match + valid code signature) before the in-place swap; Settings now shows release notes, last-checked time and an opt-in "check on launch". **Visibility:** sync failures now show a dashboard banner instead of silently lowering totals. Plus a single `VERSION` source of truth and a self-counting test runner. |

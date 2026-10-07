@@ -61,6 +61,7 @@ struct TokenScopeCoreTestsRunner {
             ("rebuildKeepsRecordsFromRewrittenLogs", { try await rebuildKeepsRecordsFromRewrittenLogs() }),
             ("rebuildPruningRequiresAFullReadAndALandedUpsert", { try rebuildPruningRequiresAFullReadAndALandedUpsert() }),
             ("jsonlAdapterReportsOnlyFullyReadFiles", { try await jsonlAdapterReportsOnlyFullyReadFiles() }),
+            ("jsonlAdapterReadsPastInvalidUTF8", { try await jsonlAdapterReadsPastInvalidUTF8() }),
             ("clearLocalDataKeepsASafetySnapshot", { try await clearLocalDataKeepsASafetySnapshot() }),
             ("safetyBackupsKeepOnlyTheNewest", { try safetyBackupsKeepOnlyTheNewest() }),
             ("backupRoundTripsEveryFieldExactly", { try backupRoundTripsEveryFieldExactly() }),
@@ -1027,6 +1028,22 @@ struct TokenScopeCoreTestsRunner {
         let incremental = try await adapter.scan(source: source, pricing: [], cursorStore: repo, fullScan: false)
         try expect(incremental.records.map(\.requestId) == ["m2"], "the incremental pass should read only the appended line")
         try expect(incremental.fullyReadFiles.isEmpty, "a resumed read must not claim the whole file")
+    }
+
+    static func jsonlAdapterReadsPastInvalidUTF8() async throws {
+        // A line that isn't valid UTF-8 used to end the whole file read, silently dropping every
+        // record after it — and a full rebuild could then prune those records as stale.
+        let dir = try makeTempDirectory("bad-utf8")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.jsonl")
+        var data = Data((claudeUsageLine(messageId: "before", input: 1) + "\n").utf8)
+        data.append(contentsOf: [0x7B, 0xFF, 0xFE, 0x7D, 0x0A])
+        data.append(Data((claudeUsageLine(messageId: "after", input: 2) + "\n").utf8))
+        try data.write(to: file)
+        let adapter = LocalJSONLUsageAdapter(tool: .claudeCode, displayName: "Claude Test", defaultGlobPatterns: [dir.path + "/*.jsonl"], parser: LocalUsageParser.parseClaudeLine)
+        let result = try await adapter.scan(source: UsageSource(tool: .claudeCode, name: "t", accountId: "a", apiKeyIdentity: "i"), pricing: [], cursorStore: nil, fullScan: true)
+        try expect(result.records.compactMap(\.requestId) == ["before", "after"], "records after an invalid UTF-8 line must still be read, got \(result.records.compactMap(\.requestId))")
+        try expect(result.fullyReadFiles[file.path] == Int64(data.count), "the file should count as read in full")
     }
 
     static func clearLocalDataKeepsASafetySnapshot() async throws {

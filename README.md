@@ -3,7 +3,7 @@
 > A local-first, native macOS app that tracks **token usage, estimated cost, trends and budgets** across local AI coding/chat tools. It reads local logs and SQLite databases only, aggregates everything on-device, and has **no upload path**.
 
 <p>
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.18-7728ff">
+  <img alt="version" src="https://img.shields.io/badge/version-1.1.19-7728ff">
   <img alt="platform" src="https://img.shields.io/badge/macOS-14%2B-blue">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="ui" src="https://img.shields.io/badge/UI-SwiftUI-72e7ff">
@@ -48,7 +48,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 ## Features
 
 - **Bilingual UI (English / 中文)** — English by default; switch language live in Settings and the choice is persisted.
-- **Unified multi-tool tracking** — aggregates usage from Claude Code, Codex, Hermes, OpenClaw and OpenCode in one place.
+- **Unified multi-tool tracking** — aggregates usage from Claude Code, Codex, Hermes, OpenClaw, OpenCode, DeepSeek Harness and more in one place.
 - **Local-first, zero upload** — reads local logs / SQLite only; data stays on your machine. No telemetry, no upload path.
 - **Incremental sync** — per-file resume cursors mean only newly appended data is parsed by default; a full re-read is one click away and keeps history whose original logs are already gone.
 - **SQLite persistence** — normalized records, pricing, budgets and cursors are stored in SQLite (WAL). Records are keyed independently of sources/accounts, so historical usage survives source/account removal.
@@ -66,7 +66,7 @@ It **only reads local files and local SQLite databases**, normalizes and aggrega
 
 ## Supported tools & data sources
 
-Five built-in adapters:
+Built-in adapters include (`AdapterRegistry.defaultAdapters()` has the full list):
 
 | Tool | Data source | Type |
 |---|---|---|
@@ -75,8 +75,9 @@ Five built-in adapters:
 | **Hermes** | `~/.hermes/state.db` | SQLite (`sessions` table, incl. `estimated_cost_usd`) |
 | **OpenClaw** | `~/.openclaw/agents/*/sessions/*.jsonl` | JSONL (incl. `usage.cost.total`) |
 | **OpenCode** | `~/.local/share/opencode/opencode.db` | SQLite (message rows, incl. cost fields) |
+| **DeepSeek Harness** | `~/.dsh/sessions/*/*/session.vN.jsonl.zstd` (or `$DSH_HOME/sessions`) | zstd-compressed JSONL event logs (`assistant/message`, `assistant/attempt`, `compaction/summary`), decoded by a built-in zstd decoder |
 
-> **Adding a tool** (Cursor / OpenAI / Gemini …): add a `ToolKind` case in `Models.swift`, implement an adapter, register it in `AdapterRegistry`, and add default rows in `UsageStore.defaultPricing()`. JSONL-based tools can reuse `LocalJSONLUsageAdapter` by passing a parser closure.
+> **Adding a tool** (Cursor / OpenAI / Gemini …): add a `ToolKind` case in `Models.swift`, implement an adapter, register it in `AdapterRegistry`, add default rows in `UsageStore.defaultPricing()` (mirrored in `tools/windows-exporter/pricing.go`), add the tool to `UsageStore.toolsSeededWhenFirstSeen` so upgrading users receive those rows, and give it a `ToolKind.displayColor` in `Theme.swift`. JSONL-based tools can reuse `LocalJSONLUsageAdapter` by passing a parser closure.
 
 ---
 
@@ -156,7 +157,7 @@ There are **two parallel test suites** covering the same logic (update both when
 ```bash
 # 1) Hand-rolled fast checker (no XCTest/Swift Testing runtime dependency)
 swift run TokenScopeCoreTestsRunner
-#    expected: TokenScopeCoreTestsRunner: 65 checks passed (count is derived, so it stays in sync)
+#    expected: TokenScopeCoreTestsRunner: 73 checks passed (count is derived, so it stays in sync)
 
 # 2) Swift Testing suite
 swift test
@@ -287,7 +288,7 @@ cost = inputTokens  / 1_000_000 * inputPrice
      + cacheTokens  / 1_000_000 * cachePrice
 ```
 
-Matching order is `(tool, model)` → `(model)` → a hardcoded fallback. **Source-provided cost is preferred when present** (Hermes `estimated_cost_usd`, OpenClaw `usage.cost.total`, OpenCode cost fields). Money is `Decimal` internally, bridged to `Double` only for SQLite / SwiftUI. You can add, update or delete model pricing on the **Pricing** screen (persisted to SQLite).
+Matching order is `(tool, model)` → `(model)` → a hardcoded fallback. **Source-provided cost is preferred when present** (Hermes `estimated_cost_usd`, OpenClaw `usage.cost.total`, OpenCode cost fields). Money is `Decimal` internally, bridged to `Double` only for SQLite / SwiftUI. You can add, update or delete model pricing on the **Pricing** screen (persisted to SQLite). Prices are USD per million tokens (input / output / cache read), and default rows cover current Claude, OpenAI, GLM, DeepSeek, MiMo and Kimi models at their official list prices. A record's cost is fixed when it is read, except that records priced by the $3 / $15 / $0.30 fallback (their model had no price yet) are re-priced on the next launch once the model gets one; a safety snapshot is taken first. Editing an existing price only affects records read afterwards.
 
 Budget progress has two modes (toggle in-app):
 
@@ -367,6 +368,7 @@ Token-UI-TokenScope/
 
 | Version | Notes |
 |---|---|
+| **v1.1.19** | **DeepSeek Harness support:** usage from DeepSeek Harness sessions (`~/.dsh/sessions`, or `$DSH_HOME/sessions`) is now tracked. Its zstd-compressed session logs are read by a built-in decoder. Every billed request is counted once: final replies, failed or retried attempts, and context compaction. Forked sessions don't count their parent's history again, and older log generations kept after a migration are skipped. **Current prices:** default rows now cover current Claude, OpenAI, GLM, DeepSeek, MiMo and Kimi models at their official list prices (USD per million tokens). On upgrade, rows your table lacks are added once and your own prices are never overwritten. **Fairer history:** records that were priced at the $3 / $15 / $0.30 fallback because their model had no price yet are re-priced once that model gets one. A safety snapshot is taken first, and editing an existing price still only affects records read afterwards. The Windows exporter (now `TokenScopeExport-windows-1.0.1.zip`) carries the same default prices. |
 | **v1.1.18** | **Windows usage export:** a new standalone program ([tools/windows-exporter](tools/windows-exporter), attached to the release as `TokenScopeExport-windows-1.0.0.zip`) exports a Windows PC's Claude Code, Claude Desktop Cowork, Codex and OpenCode usage into a backup file that the Mac app imports from Export / Import. It reads only, and every exported record matches what the Mac app derives from the same log. **Log reading fix:** a log line with invalid UTF-8 no longer stops the whole file from being read. Previously every record after that line was skipped, and a full re-read could then have pruned those records as stale. |
 | **v1.1.17** | **Your history is kept:** a full re-read no longer empties the database first. Claude Code deletes transcripts after 30 days, so that used to permanently lose all older usage. It now keeps every record whose log is gone and prunes only provably stale leftovers, and the database is snapshotted automatically before every full re-read, clear, import and data migration (`Backups/`, newest 5 kept). **Full backup & restore:** Export / Import saves every record plus pricing and budgets to one verified JSON file that you can import on any Mac. Importing only adds missing records and never changes existing ones, and the automatic snapshots can be imported too. **Codex accuracy:** an archived Codex session (moved to `archived_sessions/`) was counted twice. Records are now keyed by the session file's name, and existing duplicates are merged automatically on first launch, so Codex totals drop by those duplicates. **Qoder fix:** Qoder usage read as zero whenever Qoder wasn't running, because its closed WAL database couldn't be opened read-only; it is now read correctly. |
 | **v1.1.16** | **Auto-refresh:** a Settings toggle plus an interval picker (1h / 30m / 10m / 5m / 1m / 30s / 10s / 5s / real-time) runs an incremental sync on a timer, skipping a tick while one is still in flight. **Tool colors:** every tool now has its own color in the tool distribution (was only Claude Code / Codex / Hermes; the rest were white), with a color swatch per row. **Clearer empty state:** when a search / tool filter matches nothing, the tool distribution says so and offers a one-click **Clear filter** instead of the misleading "no data" message. **Hardening:** all refresh triggers (timer, manual buttons, clear, full rebuild) share one reentrancy gate so they can't interleave on the main actor. Also adds the remaining Core sources to the Xcode targets so the Xcode build path matches SwiftPM. |

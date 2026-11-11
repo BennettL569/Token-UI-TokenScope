@@ -9,15 +9,17 @@ public enum ToolKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case qoder = "Qoder"
     case qoderCN = "QoderCN"
     case zCode = "ZCode"
+    case deepSeekHarness = "DeepSeekHarness"
 
     public var id: String { rawValue }
 
     /// Whether this tool reports cache *creation* (write) tokens as a distinct, billed category.
     /// Only Claude Code (Anthropic's API) does: OpenAI-style providers (Codex, Qoder) report cache
     /// *reads* only and have no cache-write concept, and the tools that do carry a cache-write field
-    /// (Hermes, OpenCode, ZCode, …) are fed by providers that leave it 0. So for every tool except
-    /// Claude Code a 0 means "not reported", not "measured zero" — the UI shows "N/A" instead of a
-    /// misleading 0. A genuine non-zero is still shown (see `UsageRecord.showsCacheCreation`).
+    /// (Hermes, OpenCode, ZCode, DeepSeek Harness, …) are fed by providers that leave it 0 — DeepSeek
+    /// has no cache-write charge. So for every tool except Claude Code a 0 means "not reported", not
+    /// "measured zero" — the UI shows "N/A" instead of a misleading 0. A genuine non-zero is still
+    /// shown (see `UsageRecord.showsCacheCreation`).
     public var reportsCacheCreation: Bool {
         self == .claudeCode
     }

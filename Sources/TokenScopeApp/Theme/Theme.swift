@@ -12,13 +12,15 @@ extension Color {
     static let scopeTextMuted = Color(red: 0.25, green: 0.32, blue: 0.43).opacity(0.82)
 
     // Per-tool accent colors used by the tool-distribution chart. The three originals
-    // (cyan / blue / purple) are reused; the rest fill out the hue wheel so all eight tools
+    // (cyan / blue / purple) are reused; the rest fill out the hue wheel so all nine tools
     // are visually distinct on both the light and dark themes.
     static let toolOrange = Color(red: 0.96, green: 0.49, blue: 0.12)
     static let toolGreen = Color(red: 0.16, green: 0.69, blue: 0.40)
     static let toolMagenta = Color(red: 0.85, green: 0.18, blue: 0.66)
     static let toolRed = Color(red: 0.89, green: 0.22, blue: 0.24)
     static let toolGold = Color(red: 0.72, green: 0.54, blue: 0.04)
+    /// A desaturated slate: the saturated hues are all taken, and it reads on both themes.
+    static let toolSlate = Color(red: 0.42, green: 0.50, blue: 0.62)
 }
 
 extension ToolKind {
@@ -34,6 +36,7 @@ extension ToolKind {
         case .qoder: return .toolMagenta
         case .qoderCN: return .toolRed
         case .zCode: return .toolGold
+        case .deepSeekHarness: return .toolSlate
         }
     }
 }

@@ -2,10 +2,20 @@ import Foundation
 
 public enum PricingEngine {
     public static func estimate(record: UsageRecord, pricing: [ModelPricing]) -> Decimal {
-        let match = pricing.first { $0.tool == record.source && $0.model == record.model }
-            ?? pricing.first { $0.model == record.model }
-            ?? ModelPricing(tool: record.source, model: record.model, inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3)
+        let match = matchingPricing(for: record, in: pricing) ?? fallbackPricing(for: record)
         return estimate(inputTokens: record.inputTokens, outputTokens: record.outputTokens, cacheTokens: record.cacheTokens, pricing: match)
+    }
+
+    /// The row that prices `record`: its tool and model, else the first row for the model under any
+    /// tool. `nil` means the record is priced by `fallbackPricing`.
+    public static func matchingPricing(for record: UsageRecord, in pricing: [ModelPricing]) -> ModelPricing? {
+        pricing.first { $0.tool == record.source && $0.model == record.model }
+            ?? pricing.first { $0.model == record.model }
+    }
+
+    /// $3 / $15 / $0.30 per million, for a model that has no pricing row.
+    public static func fallbackPricing(for record: UsageRecord) -> ModelPricing {
+        ModelPricing(tool: record.source, model: record.model, inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3)
     }
 
     public static func estimate(inputTokens: Int, outputTokens: Int, cacheTokens: Int, pricing: ModelPricing) -> Decimal {

@@ -281,6 +281,7 @@ struct TokenScopeTests {
         #expect(ToolKind.qoder.reportsCacheCreation == false)
         #expect(ToolKind.qoderCN.reportsCacheCreation == false)
         #expect(ToolKind.zCode.reportsCacheCreation == false)
+        #expect(ToolKind.deepSeekHarness.reportsCacheCreation == false)
     }
 
     @Test func recordShowsCacheCreationOnlyForClaudeOrPositive() {
@@ -292,7 +293,7 @@ struct TokenScopeTests {
         }
         #expect(record(.claudeCode, cacheCreation: 0).showsCacheCreation)
         #expect(record(.claudeCode, cacheCreation: 5).showsCacheCreation)
-        for tool in [ToolKind.codeX, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode] {
+        for tool in [ToolKind.codeX, .hermes, .openClaw, .openCode, .qoder, .qoderCN, .zCode, .deepSeekHarness] {
             #expect(record(tool, cacheCreation: 0).showsCacheCreation == false)
             #expect(record(tool, cacheCreation: 7).showsCacheCreation)
         }
@@ -1007,4 +1008,332 @@ struct TokenScopeTests {
         #expect(preview.newRecordCount == 0)
         #expect(preview.backup.records.first?.dedupeKey == current.dedupeKey)
     }
+
+    // MARK: - Re-pricing fallback-priced records
+
+    /// 1M input, 100K output, 2M cache tokens: $5.10 at the $3 / $15 / $0.30 fallback.
+    private func pricingRecord(_ id: String, tool: ToolKind = .codeX, model: String, cost: Decimal? = nil) -> UsageRecord {
+        var record = UsageRecord(source: tool, accountId: "a", apiKeyHash: "k", model: model, timestamp: Date(timeIntervalSince1970: 1_790_000_000), inputTokens: 1_000_000, outputTokens: 100_000, cacheTokens: 2_000_000, requestId: id, rawSource: "/tmp/\(id).jsonl")
+        record.estimatedCost = cost ?? PricingEngine.estimate(record: record, pricing: [])
+        return record
+    }
+
+    @Test func repricingGivesFallbackPricedRecordsTheirRealPrice() throws {
+        let pricing = [
+            ModelPricing(tool: .codeX, model: "priced-now", inputPerMillion: 1, outputPerMillion: 2, cachePerMillion: 0.1),
+            ModelPricing(tool: .codeX, model: "row-priced", inputPerMillion: 5, outputPerMillion: 30, cachePerMillion: 0.5),
+        ]
+        let fallbackPriced = pricingRecord("a", model: "priced-now")
+        #expect(abs(NSDecimalNumber(decimal: fallbackPriced.estimatedCost).doubleValue - 5.1) < 1e-9, "the fallback is $3 / $15 / $0.30")
+        var rowPriced = pricingRecord("b", model: "row-priced")
+        rowPriced.estimatedCost = PricingEngine.estimate(record: rowPriced, pricing: pricing)
+        let records = [
+            fallbackPriced,
+            rowPriced,                                                           // priced by its row: kept
+            pricingRecord("c", model: "still-unpriced"),                         // no row yet: kept
+            pricingRecord("d", model: "priced-now", cost: Decimal(string: "0.77")!), // a cost the tool reported: kept
+            pricingRecord("e", tool: .hermes, model: "priced-now"),              // priced by the model's row under another tool
+        ]
+        let repriced = UsageStore.recordsRepricedFromFallback(records, pricing: pricing)
+        #expect(repriced.compactMap(\.requestId) == ["a", "e"], "only fallback-priced records whose model now has a price change, got \(repriced.compactMap(\.requestId))")
+        // 1M × $1 + 100K × $2 + 2M × $0.10 per million.
+        #expect(repriced.allSatisfy { abs(NSDecimalNumber(decimal: $0.estimatedCost).doubleValue - 1.4) < 1e-9 }, "they take the row's price")
+        #expect(UsageStore.recordsRepricedFromFallback(repriced, pricing: pricing).isEmpty, "re-pricing is idempotent")
+        #expect(UsageStore.recordsRepricedFromFallback(records, pricing: pricing, eligibleModels: ["row-priced"]).isEmpty, "models outside eligibleModels are never touched")
+
+        // A real row at the fallback's own rates (Sonnet: $3 / $15 / $0.30) yields the same value as the
+        // fallback. Once the user edits that row, its history must not be rewritten: the model already
+        // had a price, so it isn't eligible.
+        let sonnet = pricingRecord("s", tool: .claudeCode, model: "claude-sonnet-4-6")
+        let edited = [ModelPricing(tool: .claudeCode, model: "claude-sonnet-4-6", inputPerMillion: 2, outputPerMillion: 10, cachePerMillion: 0.2)]
+        #expect(UsageStore.recordsRepricedFromFallback([sonnet], pricing: edited, eligibleModels: []).isEmpty, "editing an existing row never re-prices its history")
+    }
+
+    @Test func storeRepricesFallbackRecordsAfterASnapshot() async throws {
+        let dir = try makeTempDirectory("reprice")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        repo.upsert([pricingRecord("a", model: "priced-now"), pricingRecord("c", model: "still-unpriced")])
+        let store = UsageStore(repository: repo, registry: AdapterRegistry(adapters: [:]), widgetSummaryURL: nil)
+        store.setPricing(ModelPricing(tool: .codeX, model: "priced-now", inputPerMillion: 1, outputPerMillion: 2, cachePerMillion: 0.1))
+        let pricedNow = await store.repriceFallbackPricedRecords(previouslyPricedModels: nil)
+        #expect(pricedNow?.contains("priced-now") == true, "it reports the models priced now")
+        let costs = Dictionary(uniqueKeysWithValues: repo.all().map { ($0.requestId ?? "", NSDecimalNumber(decimal: $0.estimatedCost).doubleValue) })
+        #expect(abs((costs["a"] ?? 0) - 1.4) < 1e-9 && abs((costs["c"] ?? 0) - 5.1) < 1e-9, "the stored cost of the newly priced record changes, got \(costs)")
+        #expect(store.records.contains { $0.requestId == "a" && abs(NSDecimalNumber(decimal: $0.estimatedCost).doubleValue - 1.4) < 1e-9 }, "the store shows the new cost")
+        let snapshots = SafetyBackups.list(for: repo)
+        #expect(snapshots.count == 1, "one safety snapshot is written")
+        let before = PersistentUsageRepository(dbURL: snapshots[0]).all().first { $0.requestId == "a" }
+        #expect(abs(NSDecimalNumber(decimal: before?.estimatedCost ?? 0).doubleValue - 5.1) < 1e-9, "the snapshot holds the cost from before the change")
+
+        // Next launch: nothing newly priced, so nothing changes and no snapshot is taken — even after
+        // the user edits the row.
+        store.setPricing(ModelPricing(tool: .codeX, model: "priced-now", inputPerMillion: 7, outputPerMillion: 7, cachePerMillion: 7))
+        _ = await store.repriceFallbackPricedRecords(previouslyPricedModels: pricedNow)
+        let after = repo.all().first { $0.requestId == "a" }
+        #expect(abs(NSDecimalNumber(decimal: after?.estimatedCost ?? 0).doubleValue - 1.4) < 1e-9 && SafetyBackups.list(for: repo).count == 1, "an edited row doesn't rewrite history or take another snapshot")
+    }
+
+    @Test func pricingCatalogHasOneRowPerToolAndModel() throws {
+        let keys = UsageStore.defaultPricing().map { "\($0.tool.rawValue)\u{1}\($0.model.lowercased())" }
+        #expect(Set(keys).count == keys.count, "every default (tool, model) pair is listed once")
+        #expect(UsageStore.pricingCatalog.allSatisfy { $0.inputPerMillion > 0 && $0.outputPerMillion > 0 && $0.cachePerMillion >= 0 }, "catalog prices are positive")
+        // An upgrading table missing a catalog row receives it; a row the user edited keeps its value.
+        let edited = ModelPricing(tool: .claudeCode, model: "claude-opus-5-5", inputPerMillion: 1, outputPerMillion: 1, cachePerMillion: 1)
+        let merged = UsageStore.pricingByAddingMissingDefaults(UsageStore.pricingCatalog.map { (tool: $0.tool, model: $0.model) }, to: [edited], from: UsageStore.defaultPricing())
+        #expect(merged.count == UsageStore.pricingCatalog.count && merged.first == edited, "the merge adds the missing catalog rows and leaves the edited one")
+    }
+
+    // MARK: - DeepSeek Harness
+
+    @Test func zstdDecodesDeepSeekHarnessFramesAndRejectsDamage() throws {
+        let fixture = [UInt8](try #require(Data(base64Encoded: dshCompressedFixture)))
+        let decoded = try Zstd.decompress(fixture)
+        #expect(String(decoding: decoded, as: UTF8.self) == dshFixtureText(), "the Node-written frames must decode to the original JSONL")
+        let header = try Zstd.decodeFrame(fixture, at: 0)
+        #expect(header.end == 113 && String(decoding: header.content ?? [], as: UTF8.self).hasPrefix(#"{"type":"session""#), "the first frame holds only the header line")
+        let body = try Zstd.decodeFrame(fixture, at: 113)
+        #expect(body.end == fixture.count, "the second frame ends the file")
+        // A frame still being written (any strict prefix) is truncated — never corrupt, never decoded.
+        for cut in 114..<fixture.count {
+            do {
+                _ = try Zstd.decodeFrame(Array(fixture[..<cut]), at: 113)
+                Issue.record("a prefix ending at \(cut) decoded")
+            } catch Zstd.DecodeError.truncated {
+            }
+        }
+        // A flipped checksum byte is corruption.
+        var damaged = fixture
+        damaged[damaged.count - 1] ^= 0xFF
+        do {
+            _ = try Zstd.decodeFrame(damaged, at: 113)
+            Issue.record("a bad checksum was accepted")
+        } catch Zstd.DecodeError.corrupt {
+        }
+        // Raw-block frames, including one spanning several 128 KiB blocks.
+        let big = String(repeating: "0123456789abcdef", count: 20_000)
+        let stored = try Zstd.decompress(storedZstdFrame(big) + storedZstdFrame(""))
+        #expect(stored == Array(big.utf8), "stored frames must round-trip")
+    }
+
+    @Test func deepSeekHarnessParserCountsMessagesAttemptsAndCompaction() throws {
+        var state = DeepSeekHarnessParseState()
+        func parse(_ line: String) -> UsageRecord? {
+            DeepSeekHarnessUsageAdapter.parseEvent(line, sessionId: "session-x", state: &state, pricing: UsageStore.defaultPricing(), rawSource: "/tmp/dsh/session.v4.jsonl.zstd")
+        }
+        #expect(parse(#"{"type":"request/context","seq":3,"time":1794400000001,"data":{"provider":"deepseek-account","model":"deepseek-flash","contextWindow":1048576}}"#) == nil, "request/context carries no usage")
+        #expect(state.provider == "deepseek-account" && state.model == "deepseek-flash", "request/context sets the route")
+
+        // A successful attempt: inputTokens is already uncached; the stream's usage chunk repeats data.usage.
+        let message = parse(#"{"type":"assistant/message","seq":4,"time":1794400012345,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[],"source":{"kind":"model","provider":"deepseek-account","model":"deepseek-v4-pro"},"id":"0b6f3c1e"},"usage":{"inputTokens":1834,"outputTokens":412,"cacheReadTokens":15360,"cacheWriteTokens":0,"totalTokens":17606},"stream":[{"type":"chunk","time":1794400012340,"chunk":{"type":"usage","usage":{"inputTokens":1834,"outputTokens":412,"cacheReadTokens":15360,"cacheWriteTokens":0,"totalTokens":17606}}}]},"surfaceOp":"append"}"#)
+        #expect(message?.source == .deepSeekHarness && message?.model == "deepseek-v4-pro" && message?.apiKeyHash == "deepseek-account", "the message's own route wins")
+        #expect(message?.inputTokens == 1834 && message?.outputTokens == 412 && message?.cacheTokens == 15360 && message?.cacheCreationTokens == 0 && message?.totalTokens == 17606, "message tokens wrong: \(String(describing: message))")
+        #expect(message?.requestId == "message:0b6f3c1e" && message?.accountId == "session-x", "keyed by the message id")
+        #expect(message?.timestamp == Date(timeIntervalSince1970: 1_794_400_012.345), "timestamp is the event's ms time")
+        // 1834 × 1.32 + 412 × 3.96 + 15360 × 0.044 per million.
+        #expect(abs(NSDecimalNumber(decimal: message?.estimatedCost ?? 0).doubleValue - 0.00472824) < 1e-12, "cost uses the deepseek-v4-pro default price, got \(String(describing: message?.estimatedCost))")
+
+        // Usage only in the stream: the LAST usage chunk counts (they are cumulative), not their sum.
+        let streamed = parse(#"{"type":"assistant/message","seq":5,"time":1794400013000,"data":{"turn":2,"step":1,"message":{"role":"assistant","content":[],"source":{"kind":"model","provider":"deepseek-account","model":"deepseek-flash"},"id":"m2"},"stream":[{"type":"chunk","time":1,"chunk":{"type":"usage","usage":{"inputTokens":5,"outputTokens":1}}},{"type":"chunk","time":2,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":64}}},{"type":"chunk","time":3,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}"#)
+        #expect(streamed?.inputTokens == 100 && streamed?.outputTokens == 20 && streamed?.cacheReadTokens == 64, "only the last usage chunk counts")
+
+        // A failed attempt with zero usage (a 429) is noise; one with usage is a billed request whose
+        // model comes from the route.
+        #expect(parse(#"{"type":"assistant/attempt","seq":6,"time":1794400014000,"data":{"turn":3,"step":1,"stream":[{"type":"chunk","time":1,"chunk":{"type":"usage","usage":{"inputTokens":0,"outputTokens":0,"totalTokens":0}}}]}}"#) == nil, "a zero-usage attempt is skipped")
+        let attempt = parse(#"{"type":"assistant/attempt","seq":7,"time":1794400015000,"data":{"turn":3,"step":1,"stream":[{"type":"chunk","time":1,"chunk":{"type":"usage","usage":{"inputTokens":500,"outputTokens":7}}},{"type":"chunk","time":2,"chunk":{"type":"finish","reason":{"kind":"error"}}}]}}"#)
+        #expect(attempt?.model == "deepseek-flash" && attempt?.apiKeyHash == "deepseek-account" && attempt?.inputTokens == 500, "an attempt takes the route's model")
+        #expect(attempt?.requestId == "attempt:3:1:1794400015000:500:7:0:0", "attempts are keyed by turn, step, time and counts, got \(String(describing: attempt?.requestId))")
+
+        let compaction = parse(#"{"type":"compaction/summary","seq":8,"time":1794400016000,"data":{"compactionId":"c-1","summary":[],"llmStreamCall":true,"provider":"deepseek-account","model":"deepseek-flash","usage":{"inputTokens":3100,"outputTokens":900,"cacheReadTokens":48000,"cacheWriteTokens":0}}}"#)
+        #expect(compaction?.requestId == "compaction:c-1" && compaction?.inputTokens == 3100 && compaction?.cacheTokens == 48000, "compaction calls are counted")
+
+        #expect(parse(#"{"type":"tool/result","seq":9,"time":1,"data":{"usage":{"inputTokens":1}}}"#) == nil, "other events are skipped")
+        state.ownFromSeq = 20
+        #expect(parse(dshMessage(seq: 19, id: "inherited", input: 9)) == nil, "a fork's inherited events are skipped")
+        #expect(parse(dshMessage(seq: 20, id: "own", input: 9))?.requestId == "message:own", "the fork's own events count")
+        // Out-of-range numbers (a misbehaving gateway) are ignored instead of trapping.
+        #expect(parse(#"{"type":"assistant/message","seq":30,"time":1e19,"data":{"turn":1e19,"step":1,"message":{"id":"huge"},"usage":{"inputTokens":1e19,"outputTokens":9223372036854775807,"cacheReadTokens":-5}}}"#) == nil, "out-of-range counts read as 0")
+        #expect(parse(#"{"type":"assistant/message","seq":31,"time":1e19,"data":{"turn":1,"step":1,"message":{"id":"huge-time"},"usage":{"inputTokens":5}}}"#)?.inputTokens == 5, "an out-of-range time doesn't trap")
+    }
+
+    @Test func deepSeekHarnessAdapterReadsNewestGenerationAndSkipsForkPrefix() async throws {
+        let dir = try makeTempDirectory("dsh-discovery")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = dir.appendingPathComponent("--proj--")
+        func write(_ session: String, _ file: String, _ bytes: [UInt8]) throws {
+            let folder = project.appendingPathComponent(session)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(bytes).write(to: folder.appendingPathComponent(file))
+        }
+        // An older generation stays next to the migrated one: only v4 is read.
+        try write("session-a", "session.v3.jsonl.zstd", storedZstdFrame(dshHeader("session-a")) + storedZstdFrame(dshMessage(seq: 5, id: "a", input: 100)))
+        try write("session-a", "session.v4.jsonl.zstd", storedZstdFrame(dshHeader("session-a")) + storedZstdFrame(dshContext(seq: 0) + dshMessage(seq: 6, id: "a", input: 100) + dshMessage(seq: 7, id: "b", input: 200)))
+        try write("session-a", "session.lock", [])
+        try write("session-a", "session.v4.jsonl.zstd.0123456789ab.tmp", Array("garbage".utf8))
+        // A fork of a fork: everything before the LAST inherited marker is copied from ancestors.
+        try write("session-b", "session.v4.jsonl.zstd", storedZstdFrame(dshHeader("session-b", seeded: true)) + storedZstdFrame(
+            dshContext(seq: 0) + dshMessage(seq: 1, id: "grandparent", input: 1) + dshEndSeed(seq: 2, inherited: true)
+            + dshMessage(seq: 3, id: "a", input: 100) + dshEndSeed(seq: 4, inherited: true) + dshEndSeed(seq: 5, inherited: false)
+            + dshMessage(seq: 6, id: "c", input: 300)))
+        // Uncompressed logs (compression: 'none').
+        try write("session-c", "session.v4.jsonl", Array((dshHeader("session-c") + dshMessage(seq: 1, id: "d", input: 400)).utf8))
+        // A pre-release v1 log is not parsed.
+        try write("session-d", "session.v1.jsonl.zstd", storedZstdFrame(dshHeader("session-d")) + storedZstdFrame(dshMessage(seq: 1, id: "e", input: 500)))
+        // A complete frame that fails its checksum: DeepSeek Harness rejects such a log, and reading
+        // stops there rather than skipping ahead.
+        let fixture = try #require(Data(base64Encoded: dshCompressedFixture))
+        var damagedFrame = [UInt8](fixture)[113...]
+        damagedFrame[damagedFrame.endIndex - 1] ^= 0xFF
+        try write("session-e", "session.v4.jsonl.zstd", storedZstdFrame(dshHeader("session-e")) + damagedFrame + storedZstdFrame(dshMessage(seq: 40, id: "after-damage", input: 1)))
+
+        #expect(DeepSeekHarnessUsageAdapter.generation(ofFileName: "session.jsonl")?.generation == 0, "session.jsonl is v0")
+        #expect(DeepSeekHarnessUsageAdapter.generation(ofFileName: "session.v12.jsonl.zstd").map { [$0.generation, $0.compressed ? 1 : 0] } == [12, 1], "session.v12.jsonl.zstd is v12, compressed")
+        for name in ["session.v0.jsonl", "session.lock", "session.v4.jsonl.zstd.0123456789ab.tmp", "session.migration.x.jsonl.zstd.tmp", "session.vx.jsonl"] {
+            #expect(DeepSeekHarnessUsageAdapter.generation(ofFileName: name) == nil, "\(name) is not a log")
+        }
+        let logs = DeepSeekHarnessUsageAdapter.discoverLogs(roots: [dir.path])
+        #expect(logs.map { ($0.path as NSString).lastPathComponent } == ["session.v4.jsonl.zstd", "session.v4.jsonl.zstd", "session.v4.jsonl", "session.v1.jsonl.zstd", "session.v4.jsonl.zstd"], "discovery picks each session's newest generation, got \(logs)")
+
+        let adapter = DeepSeekHarnessUsageAdapter(defaultRoots: [dir.path])
+        let result = try await adapter.scan(source: UsageSource(tool: .deepSeekHarness, name: "t", accountId: "a", apiKeyIdentity: "i"), pricing: [], cursorStore: nil, fullScan: true)
+        #expect(result.records.compactMap(\.requestId).sorted() == ["message:a", "message:b", "message:c", "message:d"], "got \(result.records.compactMap(\.requestId))")
+        #expect(result.records.first { $0.requestId == "message:c" }?.accountId == "session-b", "a fork's own usage is attributed to the fork")
+        #expect(result.records.first { $0.requestId == "message:a" }?.rawSource.hasSuffix("session-a/session.v4.jsonl.zstd") == true, "the v3 generation is never read")
+        #expect(result.fullyReadFiles.count == 3 && result.fullyReadFiles.keys.allSatisfy { !$0.contains("session-e") }, "the three undamaged logs were read in full")
+    }
+
+    @Test func deepSeekHarnessAdapterResumesAtFrameBoundaries() async throws {
+        let dir = try makeTempDirectory("dsh-incremental")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let folder = dir.appendingPathComponent("sessions/--p--/session-i")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let log = folder.appendingPathComponent("session.v4.jsonl.zstd")
+        let repo = PersistentUsageRepository(dbURL: dir.appendingPathComponent("usage.sqlite"))
+        let adapter = DeepSeekHarnessUsageAdapter(defaultRoots: [dir.appendingPathComponent("sessions").path])
+        let source = UsageSource(tool: .deepSeekHarness, name: "t", accountId: "a", apiKeyIdentity: "i")
+        func append(_ bytes: [UInt8]) throws {
+            let handle = try FileHandle(forWritingTo: log)
+            handle.seekToEndOfFile()
+            handle.write(Data(bytes))
+            try handle.close()
+        }
+        func size() -> Int64 { ((try? FileManager.default.attributesOfItem(atPath: log.path))?[.size] as? NSNumber)?.int64Value ?? -1 }
+        func pass() async throws -> [UsageRecord] { try await adapter.scan(source: source, pricing: [], cursorStore: repo, fullScan: false).records }
+
+        try Data(storedZstdFrame(dshHeader("session-i")) + storedZstdFrame(dshContext(seq: 0) + dshMessage(seq: 1, id: "m1", input: 10))).write(to: log)
+        let first = try await pass()
+        #expect(first.compactMap(\.requestId) == ["message:m1"], "first pass reads the first batch")
+        #expect(repo.refreshCursor(source: .deepSeekHarness, rawSource: log.path) == Double(size()), "the cursor sits at the end of the last frame")
+
+        // The next batch holds an attempt (no model of its own), then a frame still being written.
+        let attempt = #"{"type":"assistant/attempt","seq":2,"time":1794400020000,"data":{"turn":2,"step":1,"stream":[{"type":"chunk","time":1,"chunk":{"type":"usage","usage":{"inputTokens":500,"outputTokens":0}}}]}}"# + "\n"
+        let pending = storedZstdFrame(dshMessage(seq: 3, id: "m3", input: 30))
+        try append(storedZstdFrame(attempt) + pending[..<(pending.count / 2)])
+        let second = try await pass()
+        #expect(second.compactMap(\.requestId) == ["attempt:2:1:1794400020000:500:0:0:0"], "only the complete frame is read, got \(second.compactMap(\.requestId))")
+        #expect(second.first?.model == "deepseek-flash" && second.first?.apiKeyHash == "deepseek-account", "a resumed read keeps the route from before the cursor")
+        #expect(repo.refreshCursor(source: .deepSeekHarness, rawSource: log.path) == Double(size() - Int64(pending.count / 2)), "the cursor stops before the partial frame")
+
+        // DeepSeek Harness repairs a torn tail by truncating it and writing the records again.
+        let handle = try FileHandle(forWritingTo: log)
+        try handle.truncate(atOffset: UInt64(size() - Int64(pending.count / 2)))
+        try handle.close()
+        try append(pending)
+        let third = try await pass()
+        #expect(third.compactMap(\.requestId) == ["message:m3"], "the completed frame is read once")
+        let fourth = try await pass()
+        #expect(fourth.isEmpty, "nothing new, nothing read")
+
+        // A tail too short to hold a frame magic, then junk that isn't a frame: neither looks like a
+        // replaced file, so the log isn't re-emitted on every pass.
+        let settled = repo.refreshCursor(source: .deepSeekHarness, rawSource: log.path)
+        try append([0x28, 0xB5])
+        let shortTail = try await pass()
+        #expect(shortTail.isEmpty && repo.refreshCursor(source: .deepSeekHarness, rawSource: log.path) == settled, "a 2-byte tail is a frame in progress")
+        try append([0, 0, 0, 0, 0, 0])
+        let junk = try await pass()
+        let junkAgain = try await pass()
+        #expect(junk.isEmpty && junkAgain.isEmpty && repo.refreshCursor(source: .deepSeekHarness, rawSource: log.path) == settled, "a junk tail is not read as a replaced log")
+        let trim = try FileHandle(forWritingTo: log)
+        try trim.truncate(atOffset: UInt64(settled ?? 0))
+        try trim.close()
+
+        let full = try await adapter.scan(source: source, pricing: [], cursorStore: nil, fullScan: true)
+        #expect(full.records.count == 3 && full.fullyReadFiles[log.path] == size(), "a full scan reads all three requests")
+
+        // The log was replaced by one where the cursor lands inside a frame: read it from the top.
+        try Data(storedZstdFrame(dshHeader("session-i")) + storedZstdFrame(dshContext(seq: 0) + dshMessage(seq: 1, id: "m1", input: 10) + dshMessage(seq: 2, id: "m5", input: 50) + dshMessage(seq: 3, id: "m6", input: 60))).write(to: log)
+        let replaced = try await pass()
+        #expect(replaced.compactMap(\.requestId) == ["message:m1", "message:m5", "message:m6"], "a misaligned cursor rereads the log, got \(replaced.compactMap(\.requestId))")
+        // A log cut back below the cursor is read again too.
+        try Data(storedZstdFrame(dshHeader("session-i")) + storedZstdFrame(dshMessage(seq: 1, id: "m1", input: 10))).write(to: log)
+        let shrunk = try await pass()
+        #expect(shrunk.compactMap(\.requestId) == ["message:m1"], "a shrunken log is reread, got \(shrunk.compactMap(\.requestId))")
+    }
+
+    @Test func deepSeekHarnessPricingIsSeededOnlyForANewlySeenTool() throws {
+        let olderTools = Set(ToolKind.allCases.filter { $0 != .deepSeekHarness }.map(\.rawValue))
+        let seeded = UsageStore.defaultPricingForNewlySeenTools(knownTools: olderTools)
+        #expect(!seeded.isEmpty && seeded.allSatisfy { $0.tool == .deepSeekHarness }, "an upgrade seeds only the new tool's rows")
+        #expect(seeded.contains { $0.model == "deepseek-flash" } && seeded.contains { $0.model == "deepseek-v4-pro" }, "the DeepSeek models are priced")
+        #expect(UsageStore.defaultPricingForNewlySeenTools(knownTools: olderTools.union([ToolKind.deepSeekHarness.rawValue])).isEmpty, "a tool already seen is never re-seeded, so a deleted row stays deleted")
+        let existing = UsageStore.defaultPricing().filter { $0.tool != .deepSeekHarness }
+        let merged = UsageStore.pricingByAddingMissingDefaults(seeded, to: existing, from: UsageStore.defaultPricing())
+        #expect(merged.contains { $0.tool == .deepSeekHarness && $0.model == "deepseek-flash" }, "the new tool's rows are added to an existing table")
+        // A model the table already prices under another tool keeps that row as its price for every
+        // tool: a user's custom deepseek-v4-pro row must not lose the any-tool role to a merged default.
+        let custom = ModelPricing(tool: .openCode, model: "deepseek-v4-pro", inputPerMillion: 9, outputPerMillion: 27, cachePerMillion: 0.3)
+        let withCustom = UsageStore.pricingByAddingMissingDefaults(seeded, to: [custom], from: UsageStore.defaultPricing())
+        #expect(!withCustom.contains { $0.tool == .deepSeekHarness && $0.model == "deepseek-v4-pro" }, "a default doesn't shadow the user's price for the same model")
+        let hermesRecord = UsageRecord(source: .hermes, accountId: "a", apiKeyHash: "k", model: "deepseek-v4-pro", timestamp: Date(), inputTokens: 1_000_000, outputTokens: 0, cacheTokens: 0, rawSource: "r")
+        #expect(PricingEngine.estimate(record: hermesRecord, pricing: withCustom.sorted { ($0.tool.rawValue, $0.model) < ($1.tool.rawValue, $1.model) }) == 9, "after a relaunch (rows sorted by tool) the user's row still prices it")
+    }
+}
+
+// MARK: - DeepSeek Harness fixtures
+
+/// Two frames written by Node's zstd exactly as DeepSeek Harness writes them (checksum on, one
+/// frame for the header line, one per batch): `dshFixtureText()` compressed.
+private let dshCompressedFixture = "KLUv/SR1JQMAYoYWHGBt2gM4I5H1Pk2j5bBCBs5ABWwY/BUOFkHGAAaAieDc2OiJB8pVjDtH29VRzRmPv0LTNlAMBWZZEiEdGOW8CPyqr4XNX46FZBPAtKVbf9j8QKl69flRZC0JAgA+t2hbmvj9OGwotS/9ZAAodRsAduVhIVBN0wYzzHzzx68XeRiS776J4qoKk92bEJLxvVHETBvTA24AYwBIAJYcJPYwhlhD07CJhLEeh2k4nlvTS0FxnOUw8DDK4ywcRwF4PGzBURoSGtbSODCORqFQBBjWchhrLZZYYy0LiKbBsInElEdZDLlbTKUSSptObDksHkMusYflGGJPxHqYRjHwOMvxsBqW2GJIPDYRiMdDpZRSpZSVpntKmlJKpwmRMkJGCC1KP/8p/+ttYRaDoVhiDIKlUBIaDseQx+NWi7IK1oJCURhiP47GkESJOcxiaAweB4NZ2ETiMORhFlgYgiS2MAsGRcPROIYgPMwBi2mWl7bX/q4Rba8vVX20vV5repXttWKilbK9Rqeyle21QkzWZFudjMgp2VYj/CW17+5QrYe7aHfV4l5SxVXVpElV5qrMRPk8hHgMCBkhdIg02SjP/w+Pkg+h8//DK/J+NzPRYRoh1OMi4g/x9M5///tQXX/jVf8fPtNWV/p/j7fTrf/3Ks/omf/3f8r/++feA4EGqFF4zkhSUFSSQpsBUUZCZEZE+AYSoFAIEIZBEISAYTAoAZlEGLKIsCKccO8B0j4FFkkwprOsgjJ2xXvaC+DKqmBlhxRnzTNlK725oQGbjXCSDgnNmo/I1mpzQwMyG+G0HBKYNX9ja+A2bdCzSeoG61Vd0IYzenZPeL9bW/a8Dc1IF21yw6+14awsYpYrmvBA7muwKYuWiaLaU+ulhuCyTLb7iLusx8OMZFMGIwzsgHfaA+tkRfaDIOvdx2btWIs1FjpFjEWFxTJXsbxObKIQe07SYb+UYe8trKgJCwGDVSdLsF4UWO8CNuu/Wsyv0CnqKyrwlbl75bVeE5XXc5Lw+qXueq9dRV1XCKCrOllz9SK5ejeuWcPVYm+FTpFbSW0lsLXcteq1WhGVVmlm1/XPigyzSlZWcZmszHysr1GxnrvYeoGBNBg7ZldEFQhtAtNGoNoB+UAWw3IkANffBMrwFZiQu+SpHqOBDAlnTfUYDWSQuWYZkgqsEu7KCqSfmNWwW8ZAJ1+keowIA2bImq3XtCKHTQCrhF3pVoFVN1+ztbjqyibxVf6oSvT566o/PT4i+JPyIXaZA/cY/JPYJ9gOA/4Whes+AFsMsA5oovGLTImEyf/Zsn3z072JTH67pBlTvApAE2+J"
+
+private func dshFixtureText() -> String {
+    var text = #"{"type":"session","version":4,"id":"session-fixture","createdAt":1794345576812,"isSeeded":false,"delegationDepth":0}"# + "\n"
+    text += #"{"type":"request/context","seq":0,"time":1794345576900,"data":{"provider":"deepseek-account","model":"deepseek-flash"}}"# + "\n"
+    for i in 1...30 {
+        text += #"{"type":"assistant/message","seq":\#(i),"time":\#(1794345576812 + i * 1000),"data":{"turn":\#(i),"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"done \#(i)"}],"source":{"kind":"model","provider":"deepseek-account","model":"deepseek-flash"},"id":"m-\#(i)"},"usage":{"inputTokens":\#(i * 37),"outputTokens":\#(i * 11),"cacheReadTokens":\#(i * 512)}},"surfaceOp":"append"}"# + "\n"
+    }
+    return text
+}
+
+/// A valid zstd frame holding `text` uncompressed (raw blocks, no checksum) — enough to build
+/// DeepSeek Harness logs in tests without a zstd encoder.
+private func storedZstdFrame(_ text: String) -> [UInt8] {
+    let content = Array(text.utf8)
+    var frame: [UInt8] = [0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x50] // magic, descriptor, 1 MiB window
+    var offset = 0
+    repeat {
+        let size = min(128 * 1024, content.count - offset)
+        let last = offset + size == content.count
+        let header = size << 3 | (last ? 1 : 0)
+        frame += [UInt8(header & 0xFF), UInt8(header >> 8 & 0xFF), UInt8(header >> 16 & 0xFF)]
+        frame += content[offset..<(offset + size)]
+        offset += size
+    } while offset < content.count
+    return frame
+}
+
+private func dshHeader(_ id: String, seeded: Bool = false) -> String {
+    #"{"type":"session","version":4,"id":"\#(id)","createdAt":1794400000000,"isSeeded":\#(seeded),"delegationDepth":0}"# + "\n"
+}
+
+private func dshContext(seq: Int, provider: String = "deepseek-account", model: String = "deepseek-flash") -> String {
+    #"{"type":"request/context","seq":\#(seq),"time":1794400000001,"data":{"provider":"\#(provider)","model":"\#(model)"}}"# + "\n"
+}
+
+private func dshMessage(seq: Int, id: String, input: Int, output: Int = 10, cacheRead: Int = 0, model: String = "deepseek-flash") -> String {
+    #"{"type":"assistant/message","seq":\#(seq),"time":\#(1794400010000 + seq * 1000),"data":{"turn":\#(seq),"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"source":{"kind":"model","provider":"deepseek-account","model":"\#(model)"},"id":"\#(id)"},"usage":{"inputTokens":\#(input),"outputTokens":\#(output),"cacheReadTokens":\#(cacheRead)}},"surfaceOp":"append"}"# + "\n"
+}
+
+private func dshEndSeed(seq: Int, inherited: Bool) -> String {
+    #"{"type":"session/end-seed","seq":\#(seq),"time":1794400005000,"data":{\#(inherited ? #""inherited":true"# : "")}}"# + "\n"
 }

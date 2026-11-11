@@ -117,6 +117,18 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     /// Tracks which tools have been seen so a newly added tool (e.g. ZCode) is picked up with a
     /// cheap incremental sync on launch, instead of the heavy full rebuild a parser bump performs.
     static let knownToolsDefaultsKey = "TokenScopeKnownTools"
+    /// Bumped when `pricingCatalog` gains rows. The fresh-install seed only runs on an empty table, so
+    /// on the first launch behind a bump the catalog rows an existing table lacks are merged in
+    /// (rows the user already has are never touched). Only once, so a row deleted afterwards stays
+    /// deleted.
+    static let pricingCatalogVersion = 1
+    static let pricingCatalogVersionDefaultsKey = "TokenScopePricingCatalogVersion"
+    /// Tools whose default rows `toolsSeededWhenFirstSeen` has already merged, saved right after the
+    /// merge so a row deleted later in the same launch isn't merged back on the next one.
+    static let pricingSeededToolsDefaultsKey = "TokenScopePricingSeededTools"
+    /// The models that had a pricing row at the end of the last launch; see
+    /// `repriceFallbackPricedRecords(previouslyPricedModels:)`.
+    static let pricedModelsDefaultsKey = "TokenScopePricedModels"
 
     /// Localizes an inline English/Chinese pair for the current `language`.
     public func L(_ english: String, _ chinese: String) -> String {
@@ -283,6 +295,20 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         let storedParserVersion = UserDefaults.standard.integer(forKey: Self.parserVersionDefaultsKey)
         let knownTools = Set(UserDefaults.standard.stringArray(forKey: Self.knownToolsDefaultsKey) ?? [])
         let currentTools = Set(ToolKind.allCases.map(\.rawValue))
+        // Price a newly added tool's models before its first sync reads them.
+        let seededTools = UserDefaults.standard.stringArray(forKey: Self.pricingSeededToolsDefaultsKey).map { Set($0) } ?? knownTools
+        mergeMissingDefaultPricing(for: Self.defaultPricingForNewlySeenTools(knownTools: seededTools))
+        UserDefaults.standard.set(Array(seededTools.union(currentTools)).sorted(), forKey: Self.pricingSeededToolsDefaultsKey)
+        if UserDefaults.standard.integer(forKey: Self.pricingCatalogVersionDefaultsKey) < Self.pricingCatalogVersion {
+            mergeMissingDefaultPricing(for: Self.pricingCatalog.map { (tool: $0.tool, model: $0.model) })
+            UserDefaults.standard.set(Self.pricingCatalogVersion, forKey: Self.pricingCatalogVersionDefaultsKey)
+        }
+        // Records parsed before their model had a price carry the generic fallback cost; give them
+        // the real one now that a row exists (a catalog row above, or one the user added).
+        let previouslyPriced = UserDefaults.standard.stringArray(forKey: Self.pricedModelsDefaultsKey).map { Set($0) }
+        if let pricedNow = await repriceFallbackPricedRecords(previouslyPricedModels: previouslyPriced) {
+            UserDefaults.standard.set(pricedNow.sorted(), forKey: Self.pricedModelsDefaultsKey)
+        }
         if storedParserVersion < Self.parserVersion {
             // A parser-version bump can newly recognize models that didn't exist before (Codex
             // gpt-5.5 / gpt-5.4 / gpt-5.4-mini, surfaced once the real model replaced the hardcoded
@@ -312,14 +338,95 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
         (.codeX, "gpt-5.5"), (.codeX, "gpt-5.4"), (.codeX, "gpt-5.4-mini")
     ]
 
+    /// Tools whose default pricing rows are merged into an existing pricing table the first time the
+    /// app sees the tool. The fresh-install seed only runs on an empty table, so without this an
+    /// upgrading user's records for a new tool would be priced by the generic $3 / $15 fallback. Only
+    /// tools added after this mechanism belong here: their rows cannot already be in — or have been
+    /// deleted from — an older database, so the merge can't resurrect a row the user removed.
+    public static let toolsSeededWhenFirstSeen: Set<ToolKind> = [.deepSeekHarness]
+
+    /// The default `(tool, model)` pricing rows of `toolsSeededWhenFirstSeen` tools missing from
+    /// `knownTools` (the tools a previous launch had already seen).
+    public static func defaultPricingForNewlySeenTools(knownTools: Set<String>) -> [(tool: ToolKind, model: String)] {
+        defaultPricing()
+            .filter { toolsSeededWhenFirstSeen.contains($0.tool) && !knownTools.contains($0.tool.rawValue) }
+            .map { (tool: $0.tool, model: $0.model) }
+    }
+
+    /// Records whose stored cost is the generic fallback estimate (`PricingEngine.fallbackPricing`)
+    /// although `pricing` now has a row for their model, re-priced with that row. Costs are fixed when
+    /// a record is parsed, so a record parsed before its model had a price keeps the $3 / $15 / $0.30
+    /// fallback forever otherwise — for logs that are gone, even across a full rebuild.
+    ///
+    /// The cost value alone can't tell a fallback-priced record apart from one priced by a real row at
+    /// the same rates (Sonnet is $3 / $15 / $0.30) or a cost its tool reported at those rates, so only
+    /// `eligibleModels` are considered: the models that had no row before. `nil` considers every model
+    /// — the first run, when that history isn't known yet. Pure (exposed for testing).
+    public static func recordsRepricedFromFallback(_ records: [UsageRecord], pricing: [ModelPricing], eligibleModels: Set<String>? = nil) -> [UsageRecord] {
+        // `PricingEngine.matchingPricing` finds a row for exactly these models (any tool's row counts).
+        // Residual limit: on the first run (`eligibleModels == nil`), a cost a tool reported at exactly
+        // the fallback's rates for a model that only now gets a different row would be re-priced too.
+        var candidates = Set(pricing.map(\.model))
+        if let eligibleModels { candidates.formIntersection(eligibleModels) }
+        guard !candidates.isEmpty else { return [] }
+        func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 1e-9 * max(abs(a), abs(b)) }
+        return records.compactMap { record in
+            guard candidates.contains(record.model) else { return nil }
+            // Detect in Double: cheap, and the stored cost went through a Double round trip anyway.
+            let stored = NSDecimalNumber(decimal: record.estimatedCost).doubleValue
+            let fallback = (Double(record.inputTokens) * 3 + Double(record.outputTokens) * 15 + Double(record.cacheTokens) * 0.3) / 1_000_000
+            guard close(stored, fallback) else { return nil }
+            let repriced = PricingEngine.estimate(record: record, pricing: pricing)
+            guard !close(NSDecimalNumber(decimal: repriced).doubleValue, stored) else { return nil }
+            var updated = record
+            updated.estimatedCost = repriced
+            return updated
+        }
+    }
+
+    /// Applies `recordsRepricedFromFallback` to the stored records for the models that have gained a
+    /// row since `previouslyPricedModels` (all models when `nil`), after a safety snapshot (no
+    /// snapshot, no change). A model is therefore re-priced once, when it first gets a price; editing
+    /// an existing row never rewrites history. Returns the models priced now, to pass in next time —
+    /// or `nil` if it couldn't run (another operation holds the gate, or the snapshot failed), so the
+    /// caller keeps the old set and it runs again on the next launch.
+    @MainActor
+    @discardableResult
+    public func repriceFallbackPricedRecords(previouslyPricedModels: Set<String>?) async -> Set<String>? {
+        guard !isRefreshing else { return nil }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        let pricedNow = Set(pricing.map(\.model))
+        let eligible = previouslyPricedModels.map { pricedNow.subtracting($0) }
+        if eligible?.isEmpty == true { return pricedNow }
+        let current = records
+        let prices = pricing
+        let repriced = await Task.detached { Self.recordsRepricedFromFallback(current, pricing: prices, eligibleModels: eligible) }.value
+        guard !repriced.isEmpty else { return pricedNow }
+        if await writeSafetySnapshot(reason: "before-reprice") != nil { return nil }
+        let repo = repository
+        let reloaded = await Task.detached {
+            repo.upsert(repriced)
+            return repo.all()
+        }.value
+        records = reloaded
+        rebuildDashboardSnapshot()
+        await writeWidgetSummary(records: reloaded)
+        return pricedNow
+    }
+
     /// Pure merge (exposed for testing): `existing` plus any `defaults` row matching an allowlisted
     /// `(tool, model)` that is absent from `existing`. Model names compare case-insensitively, to
-    /// match the rest of the pricing system; user-edited rows are never overwritten.
+    /// match the rest of the pricing system; user-edited rows are never overwritten. A default is also
+    /// skipped when `existing` already prices its exact model under another tool: `PricingEngine`
+    /// falls back to any tool's row for a model, and the user's own price must keep that role rather
+    /// than lose it to a merged default (which sorts first after a relaunch).
     public static func pricingByAddingMissingDefaults(_ allow: [(tool: ToolKind, model: String)], to existing: [ModelPricing], from defaults: [ModelPricing]) -> [ModelPricing] {
         let key: (ToolKind, String) -> String = { "\($0.rawValue)\u{1}\($1.lowercased())" }
         let known = Set(existing.map { key($0.tool, $0.model) })
+        let pricedModels = Set(existing.map(\.model))
         let allowed = Set(allow.map { key($0.tool, $0.model) })
-        let missing = defaults.filter { allowed.contains(key($0.tool, $0.model)) && !known.contains(key($0.tool, $0.model)) }
+        let missing = defaults.filter { allowed.contains(key($0.tool, $0.model)) && !known.contains(key($0.tool, $0.model)) && !pricedModels.contains($0.model) }
         return missing.isEmpty ? existing : existing + missing
     }
 
@@ -700,31 +807,88 @@ public final class UsageStore: ObservableObject, @unchecked Sendable {
     }
 
     public static func defaultPricing() -> [ModelPricing] {
-        [
-            ModelPricing(tool: .claudeCode, model: "claude-sonnet-4.5", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .claudeCode, model: "claude-opus-4.1", inputPerMillion: 15, outputPerMillion: 75, cachePerMillion: 1.5),
-            ModelPricing(tool: .codeX, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
-            ModelPricing(tool: .codeX, model: "gpt-5.4", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
-            ModelPricing(tool: .codeX, model: "gpt-5.4-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
-            ModelPricing(tool: .codeX, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
-            ModelPricing(tool: .codeX, model: "gpt-5-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
-            ModelPricing(tool: .hermes, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
-            ModelPricing(tool: .hermes, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .openClaw, model: "openclaw-agent", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .openClaw, model: "qwen3-coder", inputPerMillion: 0.8, outputPerMillion: 2.4, cachePerMillion: 0.08),
-            ModelPricing(tool: .openCode, model: "opencode", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .openCode, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .openCode, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
-            ModelPricing(tool: .qoder, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .qoder, model: "qmodel_latest", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .qoder, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .qoderCN, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .qoderCN, model: "qmodel_latest", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
-            ModelPricing(tool: .qoderCN, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
-            ModelPricing(tool: .zCode, model: "GLM-5.2", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11),
-            ModelPricing(tool: .zCode, model: "GLM-5", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11)
-        ]
+        basePricing + pricingCatalog
     }
+
+    /// Current models, added in pricing catalog version 1: official list prices as of 2026-11-11, USD
+    /// per million tokens (input, output, cache read), short-context / standard tier. Upgrading users
+    /// receive the rows their table lacks once (`pricingCatalogVersion`). One cache price covers cache
+    /// reads and writes; it is the read price, as reads dominate.
+    public static let pricingCatalog: [ModelPricing] = [
+        // Anthropic (platform.claude.com pricing).
+        ModelPricing(tool: .claudeCode, model: "claude-fable-5-2", inputPerMillion: 8, outputPerMillion: 40, cachePerMillion: 0.2),
+        ModelPricing(tool: .claudeCode, model: "claude-fable-5-1", inputPerMillion: 10, outputPerMillion: 50, cachePerMillion: 0.25),
+        ModelPricing(tool: .claudeCode, model: "claude-fable-5", inputPerMillion: 10, outputPerMillion: 50, cachePerMillion: 1),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-5-5", inputPerMillion: 4, outputPerMillion: 20, cachePerMillion: 0.2),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-5", inputPerMillion: 5, outputPerMillion: 25, cachePerMillion: 0.5),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-4-8", inputPerMillion: 5, outputPerMillion: 25, cachePerMillion: 0.5),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-4-7", inputPerMillion: 5, outputPerMillion: 25, cachePerMillion: 0.5),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-4-6", inputPerMillion: 5, outputPerMillion: 25, cachePerMillion: 0.5),
+        ModelPricing(tool: .claudeCode, model: "claude-sonnet-5-5", inputPerMillion: 2, outputPerMillion: 10, cachePerMillion: 0.1),
+        ModelPricing(tool: .claudeCode, model: "claude-sonnet-5", inputPerMillion: 2, outputPerMillion: 10, cachePerMillion: 0.2),
+        ModelPricing(tool: .claudeCode, model: "claude-sonnet-4-6", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .claudeCode, model: "claude-haiku-5-5", inputPerMillion: 0.1, outputPerMillion: 0.5, cachePerMillion: 0.01),
+        ModelPricing(tool: .claudeCode, model: "claude-haiku-4-5", inputPerMillion: 1, outputPerMillion: 5, cachePerMillion: 0.1),
+        ModelPricing(tool: .claudeCode, model: "claude-haiku-4-5-20251001", inputPerMillion: 1, outputPerMillion: 5, cachePerMillion: 0.1),
+        ModelPricing(tool: .hermes, model: "anthropic/claude-opus-4.7", inputPerMillion: 5, outputPerMillion: 25, cachePerMillion: 0.5),
+        // OpenAI (developers.openai.com/api/docs/pricing). gpt-5.6-sol is at its standard price; a
+        // promotion lowers it to 4 / 20 / 0.4 until 2026-11-30. codex-auto-review is Codex's approval
+        // reviewer, priced as gpt-5.6-luna (what Codex uses for it with an API key). gpt-image-2's
+        // output tokens are image tokens.
+        ModelPricing(tool: .codeX, model: "gpt-5.6-sol", inputPerMillion: 5, outputPerMillion: 30, cachePerMillion: 0.5),
+        ModelPricing(tool: .codeX, model: "gpt-5.6-terra", inputPerMillion: 2, outputPerMillion: 12, cachePerMillion: 0.2),
+        ModelPricing(tool: .codeX, model: "gpt-6-astra", inputPerMillion: 10, outputPerMillion: 50, cachePerMillion: 1),
+        ModelPricing(tool: .codeX, model: "gpt-6.1-sol", inputPerMillion: 2, outputPerMillion: 10, cachePerMillion: 0.1),
+        ModelPricing(tool: .codeX, model: "codex-auto-review", inputPerMillion: 0.2, outputPerMillion: 1.2, cachePerMillion: 0.02),
+        ModelPricing(tool: .hermes, model: "gpt-image-2", inputPerMillion: 5, outputPerMillion: 30, cachePerMillion: 1.25),
+        // Zhipu (docs.z.ai pricing). glm-5-turbo has left the live page; its last listed price.
+        ModelPricing(tool: .openCode, model: "glm-5.3", inputPerMillion: 1.4, outputPerMillion: 4.4, cachePerMillion: 0.26),
+        ModelPricing(tool: .hermes, model: "glm-5.1", inputPerMillion: 1.4, outputPerMillion: 4.4, cachePerMillion: 0.26),
+        ModelPricing(tool: .hermes, model: "glm-5-turbo", inputPerMillion: 1.2, outputPerMillion: 4, cachePerMillion: 0.24),
+        // DeepSeek (api-docs.deepseek.com pricing): peak rates; off-peak hours are half price.
+        // deepseek-v4.1-flash-abliterated is a gateway's variant of deepseek-flash.
+        ModelPricing(tool: .openCode, model: "deepseek-v4.1-flash-abliterated", inputPerMillion: 0.3, outputPerMillion: 1.2, cachePerMillion: 0.006),
+        ModelPricing(tool: .qoder, model: "DeepSeek-V4-Pro", inputPerMillion: 1.32, outputPerMillion: 3.96, cachePerMillion: 0.044),
+        // Xiaomi MiMo (mimo.mi.com) and Moonshot Kimi (platform.kimi.ai).
+        ModelPricing(tool: .hermes, model: "mimo-v2.5-pro", inputPerMillion: 0.435, outputPerMillion: 0.87, cachePerMillion: 0.0036),
+        ModelPricing(tool: .hermes, model: "moonshotai/kimi-k2.6", inputPerMillion: 0.95, outputPerMillion: 4, cachePerMillion: 0.16),
+    ]
+
+    private static let basePricing: [ModelPricing] = [
+        ModelPricing(tool: .claudeCode, model: "claude-sonnet-4.5", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .claudeCode, model: "claude-opus-4.1", inputPerMillion: 15, outputPerMillion: 75, cachePerMillion: 1.5),
+        ModelPricing(tool: .codeX, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+        ModelPricing(tool: .codeX, model: "gpt-5.4", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+        ModelPricing(tool: .codeX, model: "gpt-5.4-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
+        ModelPricing(tool: .codeX, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+        ModelPricing(tool: .codeX, model: "gpt-5-mini", inputPerMillion: 0.5, outputPerMillion: 2, cachePerMillion: 0.1),
+        ModelPricing(tool: .hermes, model: "gpt-5.5", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+        ModelPricing(tool: .hermes, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .openClaw, model: "openclaw-agent", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .openClaw, model: "qwen3-coder", inputPerMillion: 0.8, outputPerMillion: 2.4, cachePerMillion: 0.08),
+        ModelPricing(tool: .openCode, model: "opencode", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .openCode, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .openCode, model: "gpt-5.1-codex", inputPerMillion: 5, outputPerMillion: 20, cachePerMillion: 0.5),
+        ModelPricing(tool: .qoder, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .qoder, model: "qmodel_latest", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .qoder, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .qoderCN, model: "qoder", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .qoderCN, model: "qmodel_latest", inputPerMillion: 1, outputPerMillion: 3, cachePerMillion: 0.1),
+        ModelPricing(tool: .qoderCN, model: "claude-sonnet-4", inputPerMillion: 3, outputPerMillion: 15, cachePerMillion: 0.3),
+        ModelPricing(tool: .zCode, model: "GLM-5.2", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11),
+        ModelPricing(tool: .zCode, model: "GLM-5", inputPerMillion: 0.6, outputPerMillion: 2.2, cachePerMillion: 0.11),
+        // DeepSeek Harness: DeepSeek's official peak prices, USD per 1M (cache-miss input / output /
+        // cache-hit input); off-peak hours are half price. deepseek-v4.1-flash is deepseek-flash under
+        // the name OpenAI-compatible gateways use; deepseek-v4-flash (DSH's ACP default) is a retired
+        // name now served and billed as deepseek-flash. gpt-6.1-sol and glm-5.3 are the providers'
+        // own list prices, for DSH routes through third-party gateways.
+        ModelPricing(tool: .deepSeekHarness, model: "deepseek-flash", inputPerMillion: 0.3, outputPerMillion: 1.2, cachePerMillion: 0.006),
+        ModelPricing(tool: .deepSeekHarness, model: "deepseek-v4.1-flash", inputPerMillion: 0.3, outputPerMillion: 1.2, cachePerMillion: 0.006),
+        ModelPricing(tool: .deepSeekHarness, model: "deepseek-v4-pro", inputPerMillion: 1.32, outputPerMillion: 3.96, cachePerMillion: 0.044),
+        ModelPricing(tool: .deepSeekHarness, model: "deepseek-v4-flash", inputPerMillion: 0.3, outputPerMillion: 1.2, cachePerMillion: 0.006),
+        ModelPricing(tool: .deepSeekHarness, model: "gpt-6.1-sol", inputPerMillion: 2, outputPerMillion: 10, cachePerMillion: 0.1),
+        ModelPricing(tool: .deepSeekHarness, model: "glm-5.3", inputPerMillion: 1.4, outputPerMillion: 4.4, cachePerMillion: 0.26)
+    ]
 }
 
 private extension Dictionary {

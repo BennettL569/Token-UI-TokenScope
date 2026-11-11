@@ -77,6 +77,10 @@
 		D0DE00000000000000000031 /* RebuildPruning.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000011 /* RebuildPruning.swift */; };
 		D0DE00000000000000000032 /* Backup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000012 /* Backup.swift */; };
 		D0DE00000000000000000033 /* CodexDedupeKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000013 /* CodexDedupeKey.swift */; };
+		D0DE00000000000000000024 /* Zstd.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000014 /* Zstd.swift */; };
+		D0DE00000000000000000025 /* DeepSeekHarnessUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000015 /* DeepSeekHarnessUsageAdapter.swift */; };
+		D0DE00000000000000000034 /* Zstd.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000014 /* Zstd.swift */; };
+		D0DE00000000000000000035 /* DeepSeekHarnessUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DE00000000000000000015 /* DeepSeekHarnessUsageAdapter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -178,6 +182,8 @@
 		D0DE00000000000000000011 /* RebuildPruning.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RebuildPruning.swift; path = Sources/TokenScopeCore/Storage/RebuildPruning.swift; sourceTree = SOURCE_ROOT; };
 		D0DE00000000000000000012 /* Backup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Backup.swift; path = Sources/TokenScopeCore/Services/Backup.swift; sourceTree = SOURCE_ROOT; };
 		D0DE00000000000000000013 /* CodexDedupeKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CodexDedupeKey.swift; path = Sources/TokenScopeCore/Services/CodexDedupeKey.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000014 /* Zstd.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Zstd.swift; path = Sources/TokenScopeCore/Services/Zstd.swift; sourceTree = SOURCE_ROOT; };
+		D0DE00000000000000000015 /* DeepSeekHarnessUsageAdapter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DeepSeekHarnessUsageAdapter.swift; path = Sources/TokenScopeCore/Adapters/DeepSeekHarnessUsageAdapter.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -339,6 +345,8 @@
 				D0DE00000000000000000011 /* RebuildPruning.swift */,
 				D0DE00000000000000000012 /* Backup.swift */,
 				D0DE00000000000000000013 /* CodexDedupeKey.swift */,
+				D0DE00000000000000000014 /* Zstd.swift */,
+				D0DE00000000000000000015 /* DeepSeekHarnessUsageAdapter.swift */,
 			);
 			name = TokenScopeCore;
 			sourceTree = "<group>";
@@ -560,6 +568,8 @@
 				D0DE00000000000000000021 /* RebuildPruning.swift in Sources */,
 				D0DE00000000000000000022 /* Backup.swift in Sources */,
 				D0DE00000000000000000023 /* CodexDedupeKey.swift in Sources */,
+				D0DE00000000000000000024 /* Zstd.swift in Sources */,
+				D0DE00000000000000000025 /* DeepSeekHarnessUsageAdapter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -603,6 +613,8 @@
 				D0DE00000000000000000031 /* RebuildPruning.swift in Sources */,
 				D0DE00000000000000000032 /* Backup.swift in Sources */,
 				D0DE00000000000000000033 /* CodexDedupeKey.swift in Sources */,
+				D0DE00000000000000000034 /* Zstd.swift in Sources */,
+				D0DE00000000000000000035 /* DeepSeekHarnessUsageAdapter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -701,7 +713,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -726,7 +738,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -755,7 +767,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;
@@ -778,7 +790,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -808,7 +820,7 @@
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -833,7 +845,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.tests;
 				SDKROOT = macosx;
@@ -917,7 +929,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/TokenScopeWidgets-Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D WIDGET_EXTENSION_DIRECT_CORE";
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app.TokenScopeWidgetsExtension;
@@ -949,7 +961,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 TokenScope.";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.18;
+				MARKETING_VERSION = 1.1.19;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokenscope.app;
 				PRODUCT_NAME = TokenScope;
